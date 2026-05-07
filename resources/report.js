@@ -406,26 +406,6 @@ async function _summaryGemApv(){
     return s+'\n\n';
 }
 
-async function _summaryEpics(){
-    let data;
-    try{ data=await fetch('/api/epics/latest').then(r=>r.json()); }catch(e){}
-    if(!data || !data.channels || !data.channels.length) return '';
-    let s=`EPICS events: ${data.events||0}\n\n`;
-    s+=mdTable(
-        ['Channel','Latest','Mean','Status'],
-        data.channels.map(ch=>{
-            let status='OK';
-            if(ch.count>=epicsMinAvgPts && ch.mean!==0){
-                const dev=Math.abs(ch.value-ch.mean)/Math.abs(ch.mean);
-                if(dev>=epicsAlertThresh) status='**JUMPING**';
-                else if(dev>=epicsWarnThresh) status='**CHANGING**';
-            }else if(ch.count<epicsMinAvgPts){ status='--'; }
-            return [ch.name,ch.value,ch.mean,status];
-        }),['l','r','r','l']
-    );
-    return s;
-}
-
 async function _summaryPhysics(){
     let data, ml, hxy;
     try{ data=await fetch('/api/physics/energy_angle').then(r=>r.json()); }catch(e){}
@@ -447,7 +427,8 @@ const _SECTION_SUMMARIES = {
     cluster: _summaryCluster,
     gem:     _summaryGem,
     gem_apv: _summaryGemApv,
-    epics:   _summaryEpics,
+    // EPICS: screenshot is enough; the channel table duplicated it in text
+    // and dominated the post body, so no text summary.
     physics: _summaryPhysics,
 };
 
