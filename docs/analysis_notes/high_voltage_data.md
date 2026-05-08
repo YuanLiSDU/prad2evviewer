@@ -60,15 +60,29 @@ prad2ana_replay_add_hv [-d <hv_dir>] [-c "ch1,ch2,..."] [-p <pad_s>]
 
 ### What it writes
 
-Five trees, all in the same ROOT file as the input:
+Up to five trees, all in the same ROOT file as the input:
 
-| Tree | Entries | Purpose |
-|---|---|---|
-| `hv` | one per HV snapshot (200 ms cadence) | per-channel `dv[N_ch]/F` and `v0set[N_ch]/F`, plus event-key columns |
-| `hv_channels` | one per HV channel | `channel_id/s`, `name/C` — name lookup table for the columns of `hv.dv` / `hv.v0set` |
-| `hv_booster` | one per booster snapshot (only when `n_boosters > 0`) | TDK-Lambda booster monitoring: `vmon/imon/vset/iset[N_bst]/F` |
-| `hv_booster_channels` | one per booster | name lookup for the booster columns |
-| `hv_meta` | exactly one entry | `run_t_start_unix/D`, `run_t_end_unix/D`, `interval_ms/I`, `n_channels/I`, `n_boosters/I` |
+| Tree | Entries | Required? | Why a separate tree? |
+|---|---|---|---|
+| `hv` | one per HV snapshot (200 ms cadence) | **yes** | The actual time series — `dv[N_ch]/F`, `v0set[N_ch]/F`, plus the event-key columns. |
+| `hv_channels` | one per HV channel | **yes** | `dv[N_ch]` is positional, so the column index alone doesn't identify a channel.  This side tree holds the index → name lookup (`channel_id/s`, `name/C`) referenced from `hv`. |
+| `hv_booster` | one per booster snapshot (only when `n_boosters > 0`) | yes when boosters present | Booster snapshots have a **different cadence** from HV — the recorder writes them only when `vmon`/`imon` actually change (~tens of entries vs thousands of HV rows), so they can't share `hv`'s row schema. |
+| `hv_booster_channels` | one per booster | yes when boosters present | Same role as `hv_channels` but for the booster columns; the channel sets are disjoint and the `[N_bst]` array stride differs from `[N_ch]`. |
+| `hv_meta` | exactly one entry | **no — convenience only** | Single-row scalars: `run_t_start_unix/D`, `run_t_end_unix/D`, `interval_ms/I`, `n_channels/I`, `n_boosters/I`.  All five are derivable from elsewhere (`scalers.unix_time` min/max, `hv_channels.GetEntries()`, `hv_booster_channels.GetEntries()`, median diff of `hv.t_unix_s`); this tree exists so analysis code can read them with one branch lookup instead of a join. |
+
+So the load-bearing schema is `hv` + `hv_channels` (plus the booster
+pair when applicable); `hv_meta` is a courtesy summary.
+
+A few alternative layouts ROOT permits but this tool deliberately
+avoids:
+
+* Stash channel names in `TTree::GetUserInfo()` instead of in
+  `hv_channels`.  Avoidably loses the typed branches (`channel_id/s`,
+  `name/C`) that play nicely with `TTree::Draw` and `uproot` cuts.
+* Merge `hv` and `hv_booster` into one tree.  Not possible — TTree
+  can't carry two row-stream cadences in a single tree.
+* Drop `hv_channels` entirely and reference channels by index in
+  downstream code.  Works until somebody re-orders the projection.
 
 ### `hv` branch reference
 
