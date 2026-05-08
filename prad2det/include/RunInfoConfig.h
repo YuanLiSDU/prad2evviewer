@@ -64,7 +64,7 @@ struct RunConfig {
     float matching_radius     = 15.f;
     bool  matching_use_square = true;
     // For gain correction: which run to use as reference for computing the correction factors.  If negative, use the latest run with gain factors available.
-    std::string gain_data_dir = "gain_factor";
+    std::string gain_data_dir = "";
     int gain_ref_run = 23915;
 };
 

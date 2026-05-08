@@ -265,7 +265,7 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
     int total = 0;
 
     int run_num = get_run_int(input_evio);
-    auto gain_correction = prad2::ComputeGainCorrection(db_dir + "/" + gRunConfig.gain_data_dir, run_num, gRunConfig.gain_ref_run);
+    auto gain_correction = prad2::ComputeGainCorrection(gRunConfig.gain_data_dir, run_num, gRunConfig.gain_ref_run);
 
     while (ch.Read() == evc::status::success) {
         if (!ch.Scan()) continue;
@@ -663,7 +663,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     int total = 0;
 
     int run_num = get_run_int(input_evio);
-    auto gain_correction = prad2::ComputeGainCorrection(db_dir + "/" + gRunConfig.gain_data_dir, run_num, gRunConfig.gain_ref_run);
+    auto gain_correction = prad2::ComputeGainCorrection(gRunConfig.gain_data_dir, run_num, gRunConfig.gain_ref_run);
 
     // Per-detector lab transforms — set up by either branch of the detector
     // wiring above (PipelineBuilder for PRad-II, BuildLabTransforms for PRad-1).

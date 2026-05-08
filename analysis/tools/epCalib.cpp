@@ -272,8 +272,7 @@ int main(int argc, char *argv[])
 
                 int run_num = get_run_int(root_files[fi]);
                 auto localConfig = LoadRunConfig(db_dir + "/runinfo/2p1_general.json", run_num);
-                //auto gain_correction = prad2::ComputeGainCorrection(db_dir +
-                //    "/" + localConfig.gain_data_dir, run_num, localConfig.gain_ref_run);
+                //auto gain_correction = prad2::ComputeGainCorrection(localConfig.gain_data_dir, run_num, localConfig.gain_ref_run);
 
                 fdec::HyCalCluster clusterer(res->hycal);
                 fdec::ClusterConfig cl_cfg;

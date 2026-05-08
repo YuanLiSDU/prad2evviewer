@@ -64,7 +64,7 @@
                 "use_square_cut": true
             },
             "gain_factor": {
-                "data_dir": "gain_factor",
+                "data_dir": "/home/clasrun/prad2_daq/gain_monitoring/gain_monitor_output",
                 "ref_run": 24200
             }
         }
