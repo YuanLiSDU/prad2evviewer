@@ -14,7 +14,12 @@
         "corner_conn":        false,
         "split_iter":         6,
         "least_split":        0.01,
-        "log_weight_thres":   3.6
+        "log_weight_thres":   3.6,
+        "// Multi-pulse seed-time gate (ns).  ≤0 = legacy single-pulse mode.": "",
+        "// >0 lets HyCalCluster.AddHit be called once per analyzer pulse;": "",
+        "// FormClusters then groups neighbour pulses within ±this window of": "",
+        "// the seed pulse.": "",
+        "seed_time_window":   16.0
     },
 
     "gem": {

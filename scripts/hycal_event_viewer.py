@@ -34,18 +34,19 @@ import numpy as np
 
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QMainWindow, QWidget,
-    QVBoxLayout, QHBoxLayout, QFormLayout,
+    QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QLabel, QComboBox, QCheckBox, QCompleter, QFileDialog, QMessageBox,
     QProgressDialog, QSizePolicy, QStatusBar, QToolTip, QPushButton,
     QSpinBox, QDoubleSpinBox, QSplitter, QTabWidget, QTableWidget,
     QTableWidgetItem, QHeaderView, QDockWidget, QGroupBox,
+    QDialog, QDialogButtonBox, QFrame, QLineEdit,
 )
 from PyQt6.QtCore import (
     Qt, QObject, QPointF, QRectF, QThread, pyqtSignal, QTimer,
 )
 from PyQt6.QtGui import (
     QAction, QBrush, QKeySequence, QPainter, QColor, QPen, QFont, QPolygonF,
-    QShortcut,
+    QShortcut, QDoubleValidator,
 )
 
 from hycal_geoview import (
@@ -164,6 +165,133 @@ class ChannelHists:
     integral:    Optional[Hist1D] = None
     position:    Optional[Hist1D] = None
     npeaks:      Optional[Hist1D] = None
+
+
+# ===========================================================================
+#  Waveform peak filter — mirrors C++ PeakFilter (src/app_state.h).
+# ===========================================================================
+#
+# Each axis is an optional [min, max] range; missing bound = no constraint.
+# Quality bits use accept / reject masks resolved against PEAK_QUALITY_BITS.
+# `enable=False` makes the filter a no-op — driven by the GUI "apply" toggle.
+# Same JSON shape as the web monitor's `waveform_filter`, so the same
+# monitor_config.json `waveform.filter` block configures both viewers.
+
+# Mirrors AppState::peak_quality_bits_def in src/app_state_init.cpp.  Bit
+# values must agree with prad2py.dec.Q_PEAK_* (we read those at runtime so
+# the names stay authoritative if the C++ side adds another flag).
+def _resolve_quality_bits() -> List[Dict[str, object]]:
+    if not _HAVE_PRAD2PY:
+        return []
+    out: List[Dict[str, object]] = []
+    for name, label in (("PILED", "Pile-up"), ("DECONVOLVED", "Deconvolved")):
+        bit = getattr(prad2py.dec, f"Q_PEAK_{name}", None)
+        if bit is None:
+            continue
+        # Q_PEAK_* are masks (1 << bit_index).  Store the mask directly —
+        # the filter compares peak.quality & mask, no shift needed.
+        out.append({"mask": int(bit), "name": name, "label": label})
+    return out
+
+
+PEAK_QUALITY_BITS: List[Dict[str, object]] = _resolve_quality_bits()
+
+
+@dataclass
+class WaveformFilter:
+    """Per-peak filter for the Waveform tab — replicates ``PeakFilter`` from
+    ``src/app_state.h`` so monitor_config.json's ``waveform.filter`` JSON
+    drives both the Python viewer and the live web monitor identically.
+
+    A ``None`` bound means "no constraint" (matches the web monitor's empty
+    input fields).  ``enable=False`` short-circuits ``passes()`` so the user
+    can toggle filtering off without losing their tuned values.
+    """
+    enable:       bool = True
+    time_min:     Optional[float] = None
+    time_max:     Optional[float] = None
+    integral_min: Optional[float] = None
+    integral_max: Optional[float] = None
+    height_min:   Optional[float] = None
+    height_max:   Optional[float] = None
+    q_accept:     int = 0   # bitmask, 0 = accept any
+    q_reject:     int = 0   # bitmask, 0 = reject none
+
+    def passes(self, pk) -> bool:
+        if not self.enable:
+            return True
+        if self.time_min     is not None and pk.time     < self.time_min:     return False
+        if self.time_max     is not None and pk.time     > self.time_max:     return False
+        if self.integral_min is not None and pk.integral < self.integral_min: return False
+        if self.integral_max is not None and pk.integral > self.integral_max: return False
+        if self.height_min   is not None and pk.height   < self.height_min:   return False
+        if self.height_max   is not None and pk.height   > self.height_max:   return False
+        q = int(getattr(pk, "quality", 0))
+        if self.q_reject and (q & self.q_reject):    return False
+        if self.q_accept and not (q & self.q_accept): return False
+        return True
+
+    def copy(self) -> "WaveformFilter":
+        return WaveformFilter(**self.__dict__)
+
+    @classmethod
+    def from_json(cls, j: Optional[Dict]) -> "WaveformFilter":
+        """Parse a ``waveform.filter`` JSON object into a filter.  Mirrors
+        ``PeakFilter::parse``; unknown keys are ignored so future schema
+        additions don't break loading."""
+        f = cls()
+        j = j or {}
+
+        def _axis(key: str):
+            ax = j.get(key) or {}
+            lo = ax.get("min")
+            hi = ax.get("max")
+            return (float(lo) if lo is not None else None,
+                    float(hi) if hi is not None else None)
+
+        f.time_min,     f.time_max     = _axis("time")
+        f.integral_min, f.integral_max = _axis("integral")
+        f.height_min,   f.height_max   = _axis("height")
+
+        qb = j.get("quality_bits") or {}
+        f.q_accept = _names_to_mask(qb.get("accept") or [])
+        f.q_reject = _names_to_mask(qb.get("reject") or [])
+        return f
+
+    def to_json(self) -> Dict:
+        out: Dict = {}
+
+        def _axis(lo, hi):
+            ax: Dict = {}
+            if lo is not None: ax["min"] = lo
+            if hi is not None: ax["max"] = hi
+            return ax
+
+        if (a := _axis(self.time_min,     self.time_max))     : out["time"]     = a
+        if (a := _axis(self.integral_min, self.integral_max)) : out["integral"] = a
+        if (a := _axis(self.height_min,   self.height_max))   : out["height"]   = a
+        if self.q_accept or self.q_reject:
+            out["quality_bits"] = {
+                "accept": _mask_to_names(self.q_accept),
+                "reject": _mask_to_names(self.q_reject),
+            }
+        return out
+
+
+def _names_to_mask(names) -> int:
+    m = 0
+    for n in names or ():
+        for d in PEAK_QUALITY_BITS:
+            if d["name"] == n:
+                m |= int(d["mask"])
+                break
+    return m
+
+
+def _mask_to_names(mask: int) -> List[str]:
+    if not mask:
+        return []
+    return [d["name"] for d in PEAK_QUALITY_BITS if mask & int(d["mask"])]
 
 
 # ===========================================================================
@@ -322,7 +450,7 @@ class BatchWorker(QObject):
                  index: List[Tuple[int, int]],
                  start_idx: int, count: int,
                  channels: Dict[Tuple[int, int, int], ChannelHists],
-                 wcfg: WaveConfig, hist_threshold: float,
+                 wcfg: WaveConfig, peak_filter: "WaveformFilter",
                  accept_mask: int, reject_mask: int,
                  accumulated: Optional[np.ndarray] = None):
         super().__init__()
@@ -333,7 +461,9 @@ class BatchWorker(QObject):
         self._count = count
         self._channels = channels
         self._wcfg = wcfg
-        self._thr = hist_threshold
+        # Snapshot the filter so user edits during the batch don't change
+        # the cuts mid-run (each batch should fill against a stable cut).
+        self._filter = peak_filter.copy()
         self._accept = accept_mask
         self._reject = reject_mask
         self._accumulated = accumulated     # shared bool array, mutated in place
@@ -363,7 +493,7 @@ class BatchWorker(QObject):
         peaks_found = 0
         progress_every = max(1, self._count // 100)
         wcfg = self._wcfg
-        thr = self._thr
+        flt = self._filter
         channels = self._channels
 
         def _fold_event(phys_idx: int, sub_idx: int) -> int:
@@ -405,12 +535,13 @@ class BatchWorker(QObject):
                         _, _, peaks = analyze(samples, wcfg)
                         np_kept = 0
                         for p in peaks:
-                            if p.height >= thr:
-                                hits.height.fill(p.height)
-                                hits.integral.fill(p.integral)
-                                hits.position.fill(p.time)
-                                np_kept += 1
-                                pfound += 1
+                            if not flt.passes(p):
+                                continue
+                            hits.height.fill(p.height)
+                            hits.integral.fill(p.integral)
+                            hits.position.fill(p.time)
+                            np_kept += 1
+                            pfound += 1
                         hits.npeaks.fill(np_kept)
                         hits.events += 1
                         if np_kept > 0:
@@ -731,13 +862,14 @@ class WaveformPlotWidget(QWidget):
         self._ped_rms: float = 0.0
         self._title: str = ""
         self._clk_mhz: float = 250.0
-        # Filter cuts: peaks outside [time_min, time_max] ns or below
-        # min_height (ADC, sample−pedestal) don't contribute to the geo's
-        # max-integral / histograms.  Drawn as dim overlays so the user can
-        # see why an otherwise-shaded peak isn't reflected in the geo view.
-        self._time_min: Optional[float] = None
-        self._time_max: Optional[float] = None
-        self._min_height: Optional[float] = None
+        # Active waveform filter (mirrors web monitor's PeakFilter).  Peaks
+        # rejected by it are drawn dimmer and the cut regions get a faint
+        # overlay rectangle on the plot — same visual language as
+        # resources/waveform.js.  ``_filter_show`` mirrors the "show"
+        # toggle: when False the overlays are hidden but peaks are still
+        # dimmed (so the user can still see which ones are filtered).
+        self._filter: Optional[WaveformFilter] = None
+        self._filter_show: bool = True
 
         # --- stack mode state ---
         self._stack_enabled: bool = False
@@ -777,9 +909,8 @@ class WaveformPlotWidget(QWidget):
                  ped_mean: float, ped_rms: float,
                  title: str, clk_mhz: float = 250.0,
                  stack_key: Optional[str] = None,
-                 time_min: Optional[float] = None,
-                 time_max: Optional[float] = None,
-                 min_height: Optional[float] = None):
+                 filter: Optional["WaveformFilter"] = None,
+                 filter_show: bool = True):
         samples = np.asarray(samples, dtype=np.float32)
         self._samples = samples
         self._peaks = peaks
@@ -787,15 +918,8 @@ class WaveformPlotWidget(QWidget):
         self._ped_rms  = ped_rms
         self._title = title
         self._clk_mhz = clk_mhz
-        # Treat sentinel values (the wide-open defaults) as "no cut": the
-        # viewer seeds time_min=-1e30 / time_max=1e30 when monitor_config
-        # has no filter.time block.
-        self._time_min   = time_min if (time_min is not None
-                                        and time_min > -1e20) else None
-        self._time_max   = time_max if (time_max is not None
-                                        and time_max <  1e20) else None
-        self._min_height = (min_height if (min_height is not None
-                                           and min_height > 0) else None)
+        self._filter = filter
+        self._filter_show = bool(filter_show)
 
         if self._stack_enabled:
             key = stack_key if stack_key is not None else title
@@ -915,21 +1039,11 @@ class WaveformPlotWidget(QWidget):
     # --- single-event (default) view ---------------------------------
 
     def _peak_passes(self, pk) -> bool:
-        """True if peak satisfies the active height + time-window cuts.
-
-        Mirrors the filter applied in HyCalEventViewer._accumulate_and_display
-        when picking the per-channel max integral; peaks that fail this test
-        are still drawn but with reduced alpha so the user can see why the
-        geo view / tooltip don't reflect them.
-        """
-        if self._min_height is not None and pk.height < self._min_height:
-            return False
-        t = float(pk.time)
-        if self._time_min is not None and t < self._time_min:
-            return False
-        if self._time_max is not None and t > self._time_max:
-            return False
-        return True
+        """Delegate to the active WaveformFilter.passes() so the dimming
+        logic stays in lockstep with the histogram / geo filtering."""
+        if self._filter is None:
+            return True
+        return self._filter.passes(pk)
 
     def _paint_single(self, p: QPainter, r: QRectF):
         n = self._samples.size
@@ -954,33 +1068,34 @@ class WaveformPlotWidget(QWidget):
             return r.bottom() - (v - ymin) / (ymax - ymin) * r.height()
 
         # ---- cut-region overlays (drawn first, low layer) ---------------
-        # Mirrors xRangeShapes / yRangeShapes in resources/waveform.js: the
-        # regions outside the [time_min, time_max] / above-min_height cuts
-        # are shaded so it's visible *on the waveform* why a given peak
-        # doesn't contribute to the geo-view max integral.
+        # Mirrors xRangeShapes / yRangeShapes in resources/waveform.js.  Only
+        # drawn when the user has enabled "show" — independent of the
+        # "apply" toggle so users can hide the chrome while keeping the
+        # filter active (or vice versa).
         ns_total = (n - 1) * 1000.0 / self._clk_mhz if self._clk_mhz > 0 else 0.0
         cut_fill = QColor(THEME.TEXT_MUTED); cut_fill.setAlphaF(0.18)
         cut_edge = QColor(THEME.HIGHLIGHT)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(cut_fill)
-        if ns_total > 0 and self._time_min is not None and self._time_min > 0:
-            x1 = to_sx((self._time_min * self._clk_mhz / 1000.0))
-            x1 = min(max(x1, r.left()), r.right())
-            if x1 > r.left():
-                p.fillRect(QRectF(r.left(), r.top(),
-                                  x1 - r.left(), r.height()), cut_fill)
-                p.setPen(QPen(cut_edge, 1, Qt.PenStyle.DashLine))
-                p.drawLine(int(x1), int(r.top()), int(x1), int(r.bottom()))
-                p.setPen(Qt.PenStyle.NoPen)
-        if ns_total > 0 and self._time_max is not None and self._time_max < ns_total:
-            x2 = to_sx((self._time_max * self._clk_mhz / 1000.0))
-            x2 = min(max(x2, r.left()), r.right())
-            if x2 < r.right():
-                p.fillRect(QRectF(x2, r.top(),
-                                  r.right() - x2, r.height()), cut_fill)
-                p.setPen(QPen(cut_edge, 1, Qt.PenStyle.DashLine))
-                p.drawLine(int(x2), int(r.top()), int(x2), int(r.bottom()))
-                p.setPen(Qt.PenStyle.NoPen)
+        f = self._filter
+        if f is not None and self._filter_show:
+            # Time cut (left/right shaded bands outside [time_min, time_max]).
+            if ns_total > 0 and f.time_min is not None and f.time_min > 0:
+                x1 = to_sx((f.time_min * self._clk_mhz / 1000.0))
+                x1 = min(max(x1, r.left()), r.right())
+                if x1 > r.left():
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.fillRect(QRectF(r.left(), r.top(),
+                                      x1 - r.left(), r.height()), cut_fill)
+                    p.setPen(QPen(cut_edge, 1, Qt.PenStyle.DashLine))
+                    p.drawLine(int(x1), int(r.top()), int(x1), int(r.bottom()))
+            if ns_total > 0 and f.time_max is not None and f.time_max < ns_total:
+                x2 = to_sx((f.time_max * self._clk_mhz / 1000.0))
+                x2 = min(max(x2, r.left()), r.right())
+                if x2 < r.right():
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.fillRect(QRectF(x2, r.top(),
+                                      r.right() - x2, r.height()), cut_fill)
+                    p.setPen(QPen(cut_edge, 1, Qt.PenStyle.DashLine))
+                    p.drawLine(int(x2), int(r.top()), int(x2), int(r.bottom()))
 
         # pedestal baseline
         y_ped = to_sy(self._ped_mean) if self._ped_mean != 0 else None
@@ -992,18 +1107,32 @@ class WaveformPlotWidget(QWidget):
             y_thr = to_sy(thr_v)
             p.setPen(QPen(QColor(THEME.TEXT_MUTED), 1, Qt.PenStyle.DotLine))
             p.drawLine(int(r.left()), int(y_thr), int(r.right()), int(y_thr))
-            # height-cut shade (filter floor on peak height, ADC sample−ped).
-            # Drawn only when min_height > the analyser's per-event detection
-            # threshold (otherwise the dotted-line is already the binding cut).
-            if self._min_height is not None:
-                hcut_v = self._ped_mean + self._min_height
-                if hcut_v > thr_v:
+            # Height-cut shading — top/bottom bands for samples above
+            # height_max + ped or below height_min + ped (filter is on
+            # sample-pedestal units; we paint in raw ADC).  Drawn only when
+            # "show" is on.
+            if f is not None and self._filter_show:
+                if f.height_min is not None:
+                    hcut_v = self._ped_mean + f.height_min
+                    if hcut_v > thr_v:
+                        y_hcut = to_sy(hcut_v)
+                        y_hcut = min(max(y_hcut, r.top()), r.bottom())
+                        if y_hcut > r.top():
+                            p.setPen(Qt.PenStyle.NoPen)
+                            p.fillRect(QRectF(r.left(), y_hcut,
+                                              r.width(), r.bottom() - y_hcut),
+                                       cut_fill)
+                            p.setPen(QPen(cut_edge, 1, Qt.PenStyle.DashLine))
+                            p.drawLine(int(r.left()), int(y_hcut),
+                                       int(r.right()), int(y_hcut))
+                if f.height_max is not None:
+                    hcut_v = self._ped_mean + f.height_max
                     y_hcut = to_sy(hcut_v)
                     y_hcut = min(max(y_hcut, r.top()), r.bottom())
-                    if y_hcut > r.top():
+                    if y_hcut < r.bottom():
                         p.setPen(Qt.PenStyle.NoPen)
-                        p.fillRect(QRectF(r.left(), y_hcut,
-                                          r.width(), r.bottom() - y_hcut),
+                        p.fillRect(QRectF(r.left(), r.top(),
+                                          r.width(), y_hcut - r.top()),
                                    cut_fill)
                         p.setPen(QPen(cut_edge, 1, Qt.PenStyle.DashLine))
                         p.drawLine(int(r.left()), int(y_hcut),
@@ -1632,6 +1761,193 @@ class ClusterPanel(QWidget):
 
 
 # ===========================================================================
+#  Cut Settings dialog — modal editor for the active WaveformFilter.
+#  Mirrors resources/cut_dialog.js + viewer.html's #cut-dialog markup so
+#  users moving between the web monitor and this viewer see the same
+#  fields with the same semantics.
+# ===========================================================================
+
+
+class _RangeRow(QWidget):
+    """Two QLineEdits (min/max) with a validator.  Empty value = no
+    constraint, matching the web monitor's <input type='number'> + null
+    parsing in cut_dialog.js."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        self.min_edit = QLineEdit()
+        self.max_edit = QLineEdit()
+        for w, ph in ((self.min_edit, "min"), (self.max_edit, "max")):
+            w.setPlaceholderText(ph)
+            w.setValidator(QDoubleValidator(self))
+            w.setMinimumWidth(80)
+        lay.addWidget(QLabel("min"))
+        lay.addWidget(self.min_edit, 1)
+        lay.addSpacing(6)
+        lay.addWidget(QLabel("max"))
+        lay.addWidget(self.max_edit, 1)
+
+    def set_values(self, lo: Optional[float], hi: Optional[float]):
+        self.min_edit.setText("" if lo is None else _fmt_filter_num(lo))
+        self.max_edit.setText("" if hi is None else _fmt_filter_num(hi))
+
+    def values(self) -> Tuple[Optional[float], Optional[float]]:
+        def _parse(s: str) -> Optional[float]:
+            s = s.strip()
+            if not s:
+                return None
+            try:
+                return float(s)
+            except ValueError:
+                return None
+        return _parse(self.min_edit.text()), _parse(self.max_edit.text())
+
+
+def _fmt_filter_num(v: float) -> str:
+    """Compact representation that round-trips through float() — mirrors
+    JSON.stringify(num) on the web side."""
+    if v == int(v):
+        return f"{int(v)}"
+    return f"{v:g}"
+
+
+class CutSettingsDialog(QDialog):
+    """Modal "Cut Settings" editor — replicates resources/cut_dialog.js.
+
+    The user edits the active filter's per-axis ranges and quality bits,
+    then clicks Save to commit.  Cancel discards changes.  Reset reverts
+    the form (without committing) to the defaults snapshotted at startup
+    from monitor_config.json's ``waveform.filter`` block.
+    """
+
+    def __init__(self, parent: QWidget,
+                 current: WaveformFilter,
+                 default: WaveformFilter):
+        super().__init__(parent)
+        self.setWindowTitle("Cut Settings")
+        self.setModal(True)
+        self._default = default
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+
+        # Time / Integral / Height range groups (one QGroupBox each, mirroring
+        # the web's <fieldset class="cut-fieldset"> blocks).
+        self._rows: Dict[str, _RangeRow] = {}
+        for axis, label, suffix in (("time",     "Time",     " (ns)"),
+                                    ("integral", "Integral", ""),
+                                    ("height",   "Height",   "")):
+            gb = QGroupBox(label + suffix)
+            gl = QVBoxLayout(gb)
+            gl.setContentsMargins(8, 4, 8, 6)
+            row = _RangeRow()
+            self._rows[axis] = row
+            gl.addWidget(row)
+            root.addWidget(gb)
+
+        # Quality bits — two columns of checkboxes (accept / reject).
+        # Mirrors buildBitList() in cut_dialog.js.
+        qg = QGroupBox("Quality bits")
+        qg_lay = QGridLayout(qg)
+        qg_lay.setContentsMargins(8, 4, 8, 6)
+        qg_lay.setHorizontalSpacing(20)
+        accept_lbl = QLabel("Accept")
+        reject_lbl = QLabel("Reject")
+        for lbl in (accept_lbl, reject_lbl):
+            f = QFont(); f.setBold(True)
+            lbl.setFont(f)
+        qg_lay.addWidget(accept_lbl, 0, 0)
+        qg_lay.addWidget(reject_lbl, 0, 1)
+
+        self._accept_checks: Dict[str, QCheckBox] = {}
+        self._reject_checks: Dict[str, QCheckBox] = {}
+        if not PEAK_QUALITY_BITS:
+            note = QLabel("(no quality bits exposed by prad2py)")
+            note.setStyleSheet(f"color:{THEME.TEXT_DIM}; font-style:italic;")
+            qg_lay.addWidget(note, 1, 0, 1, 2)
+        else:
+            for r, b in enumerate(PEAK_QUALITY_BITS, start=1):
+                acc = QCheckBox(str(b["label"]))
+                rej = QCheckBox(str(b["label"]))
+                self._accept_checks[str(b["name"])] = acc
+                self._reject_checks[str(b["name"])] = rej
+                acc.toggled.connect(self._sync_bit_mutex)
+                rej.toggled.connect(self._sync_bit_mutex)
+                qg_lay.addWidget(acc, r, 0)
+                qg_lay.addWidget(rej, r, 1)
+        hint = QLabel(
+            "Empty = no constraint.  Accept: peak's set bits must overlap "
+            "the accepted flags.  Reject: peak fails if any rejected flag is set.")
+        hint.setStyleSheet(f"color:{THEME.TEXT_DIM}; font-size:10px;")
+        hint.setWordWrap(True)
+        qg_lay.addWidget(hint, qg_lay.rowCount(), 0, 1, 2)
+        root.addWidget(qg)
+
+        # Standard Cancel / Reset / Save buttonbox.
+        bb = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Reset)
+        bb.button(QDialogButtonBox.StandardButton.Save).setDefault(True)
+        bb.button(QDialogButtonBox.StandardButton.Reset).setToolTip(
+            "Restore the form to monitor_config.json's filter values "
+            "(does not commit until you click Save).")
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        bb.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(
+            self._on_reset)
+        root.addWidget(bb)
+
+        self._populate(current)
+
+    # ------------------------------------------------------------------
+
+    def _populate(self, f: WaveformFilter):
+        self._rows["time"]    .set_values(f.time_min,     f.time_max)
+        self._rows["integral"].set_values(f.integral_min, f.integral_max)
+        self._rows["height"]  .set_values(f.height_min,   f.height_max)
+        for d in PEAK_QUALITY_BITS:
+            name = str(d["name"]); mask = int(d["mask"])
+            acc = self._accept_checks.get(name)
+            rej = self._reject_checks.get(name)
+            if acc is not None: acc.setChecked(bool(f.q_accept & mask))
+            if rej is not None: rej.setChecked(bool(f.q_reject & mask))
+        self._sync_bit_mutex()
+
+    def _on_reset(self):
+        self._populate(self._default)
+
+    def _sync_bit_mutex(self):
+        """A bit can be in Accept OR Reject but not both — disable the
+        twin checkbox when its sibling is checked.  Mirrors
+        syncBitMutualExclusion() in cut_dialog.js."""
+        for name, acc in self._accept_checks.items():
+            rej = self._reject_checks.get(name)
+            if rej is None:
+                continue
+            acc.setEnabled(not rej.isChecked())
+            rej.setEnabled(not acc.isChecked())
+
+    def result_filter(self) -> WaveformFilter:
+        """Build a WaveformFilter from the current form contents.  ``enable``
+        is preserved from the input filter (controlled by the toolbar's
+        "apply" toggle, not this dialog)."""
+        f = WaveformFilter()
+        f.time_min,     f.time_max     = self._rows["time"].values()
+        f.integral_min, f.integral_max = self._rows["integral"].values()
+        f.height_min,   f.height_max   = self._rows["height"].values()
+        f.q_accept = _names_to_mask([n for n, cb in self._accept_checks.items()
+                                     if cb.isChecked()])
+        f.q_reject = _names_to_mask([n for n, cb in self._reject_checks.items()
+                                     if cb.isChecked()])
+        return f
+
+
+# ===========================================================================
 #  Main window
 # ===========================================================================
 
@@ -1690,21 +2006,17 @@ class HyCalEventViewer(QMainWindow):
         except Exception:
             self._wcfg = WaveConfig()
 
-        # Python-side height filter for hist/cluster fills — kept in sync
-        # with the analyzer's min_peak_height by default so the dock spinbox
-        # reads the same value the analyzer is using.  Editing it past the
-        # analyzer's value tightens the cut; the analyzer-level cut is the
-        # hard floor (peaks below it never reach Python).
-        self._hist_threshold = float(self._wcfg.min_peak_height)
-
-        # Peak time-cut window (ns).  Peaks whose WaveAnalyzer time falls
-        # outside [time_min, time_max] are rejected when picking the
-        # per-channel energy for histograms and clustering.  Defaults seeded
-        # from monitor_config.json `waveform.filter.time` (mirrors the web
-        # monitor's PeakFilter); fall back to a wide-open window if absent.
-        _flt_time = (hist_config.get("filter") or {}).get("time", {})
-        self._time_min = float(_flt_time.get("min", -1e30))
-        self._time_max = float(_flt_time.get("max",  1e30))
+        # Waveform peak filter — same JSON shape and semantics as the web
+        # monitor's `waveform.filter` (see resources/cut_dialog.js + C++
+        # PeakFilter).  Defaults parsed from monitor_config.json; the
+        # snapshot in `_filter_default` lets the Cut-Settings "Reset" button
+        # restore the file values without a server round-trip.  ``enable``
+        # is the GUI "apply" toggle (filter is a no-op when False); ``show``
+        # is the client-side overlay toggle on the waveform plot.
+        _flt_json = hist_config.get("filter") or {}
+        self._filter         = WaveformFilter.from_json(_flt_json)
+        self._filter_default = WaveformFilter.from_json(_flt_json)
+        self._filter_show    = True
 
         # Debounce timer for Advanced-dock re-runs: coalesce rapid
         # slider drags into a single re-read + re-analyse.  Must exist
@@ -1881,6 +2193,39 @@ class HyCalEventViewer(QMainWindow):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(3)
 
+        # Cut-Settings toolbar — mirrors the web monitor's <div class="tcut-bar">
+        # with the "Cut Settings…" / apply / show controls.  apply toggles
+        # WaveformFilter.enable; show toggles overlay drawing (no filter
+        # change).  Both fire a re-run so changes are visible immediately.
+        cut_bar = QHBoxLayout()
+        cut_bar.setContentsMargins(2, 0, 2, 0)
+        cut_bar.setSpacing(8)
+        self._cut_settings_btn = QPushButton("Cut Settings…")
+        self._cut_settings_btn.setToolTip("Edit waveform peak filter ranges")
+        self._cut_settings_btn.setStyleSheet(themed(
+            "QPushButton{background:#21262d;color:#c9d1d9;"
+            "border:1px solid #30363d;border-radius:3px;"
+            "padding:3px 10px;font:bold 9pt Monospace;}"
+            "QPushButton:hover{background:#30363d;color:#e6edf3;}"))
+        self._cut_settings_btn.clicked.connect(self._open_cut_settings_dialog)
+        cut_bar.addWidget(self._cut_settings_btn)
+        self._cut_apply_cb = QCheckBox("apply")
+        self._cut_apply_cb.setChecked(self._filter.enable)
+        self._cut_apply_cb.setToolTip(
+            "Apply the peak filter to histograms / geo coloring / clustering. "
+            "When off, every analyzed peak counts.")
+        self._cut_apply_cb.toggled.connect(self._on_cut_apply_toggled)
+        cut_bar.addWidget(self._cut_apply_cb)
+        self._cut_show_cb = QCheckBox("show")
+        self._cut_show_cb.setChecked(self._filter_show)
+        self._cut_show_cb.setToolTip(
+            "Show cut-range overlays on the waveform plot.  Independent of "
+            "apply — overlays can be hidden while the filter is active.")
+        self._cut_show_cb.toggled.connect(self._on_cut_show_toggled)
+        cut_bar.addWidget(self._cut_show_cb)
+        cut_bar.addStretch(1)
+        lay.addLayout(cut_bar)
+
         split = QSplitter(Qt.Orientation.Horizontal)
 
         # Left: geo view (square, top) + waveform plot (bottom)
@@ -2014,38 +2359,10 @@ class HyCalEventViewer(QMainWindow):
             wf.addRow(name, sp)
             self._adv_wave_int_spins[name] = sp
 
-        # Python-side hist threshold (gates hist fills + cluster feeding).
-        sp = QDoubleSpinBox()
-        sp.setRange(0.0, 65535.0); sp.setSingleStep(1.0); sp.setDecimals(2)
-        sp.setValue(self._hist_threshold)
-        sp.setToolTip("Minimum peak height (ADC) to count in hists/cluster")
-        sp.valueChanged.connect(self._on_advanced_changed)
-        wf.addRow("hist_threshold", sp)
-        self._adv_hist_threshold_spin = sp
-
-        # Peak time-cut window (ns).  Only peaks whose time falls inside
-        # [time_min, time_max] contribute to hists / cluster energies.
-        self._adv_time_min_spin = QDoubleSpinBox()
-        self._adv_time_min_spin.setRange(-1e5, 1e5)
-        self._adv_time_min_spin.setSingleStep(1.0)
-        self._adv_time_min_spin.setDecimals(1)
-        self._adv_time_min_spin.setValue(self._time_min if self._time_min > -1e20 else 0.0)
-        self._adv_time_min_spin.setToolTip(
-            "Peaks with time < this (ns) are ignored when picking the "
-            "per-channel integral.")
-        self._adv_time_min_spin.valueChanged.connect(self._on_advanced_changed)
-        wf.addRow("filter.time.min (ns)", self._adv_time_min_spin)
-
-        self._adv_time_max_spin = QDoubleSpinBox()
-        self._adv_time_max_spin.setRange(-1e5, 1e5)
-        self._adv_time_max_spin.setSingleStep(1.0)
-        self._adv_time_max_spin.setDecimals(1)
-        self._adv_time_max_spin.setValue(self._time_max if self._time_max < 1e20 else 400.0)
-        self._adv_time_max_spin.setToolTip(
-            "Peaks with time > this (ns) are ignored when picking the "
-            "per-channel integral.")
-        self._adv_time_max_spin.valueChanged.connect(self._on_advanced_changed)
-        wf.addRow("filter.time.max (ns)", self._adv_time_max_spin)
+        # Note: peak filter (time / integral / height / quality_bits) lives
+        # in the Cut Settings dialog above the waveform plot — same UX as
+        # the web monitor.  Keeping the dock focused on analyser knobs
+        # avoids two places editing the same numbers.
 
         rlay.addWidget(wg)
 
@@ -2061,6 +2378,13 @@ class HyCalEventViewer(QMainWindow):
                 ("min_cluster_energy", 0.0, 1e5, 0.1, "total cluster threshold (MeV)"),
                 ("log_weight_thres",   0.0, 20.0, 0.1, "log-weight offset"),
                 ("least_split",        0.0, 1.0, 0.01, "min fraction to keep a split hit"),
+                ("seed_time_window",   -1.0, 200.0, 0.5,
+                    "Multi-pulse seed-time gate (ns).  ≤0 disables timing "
+                    "gating (legacy single-pulse-per-module mode).  >0 lets "
+                    "AddHit() be called once per pulse; FormClusters then "
+                    "groups neighbours within ±this window of the seed pulse.\n"
+                    "Persistent default: 'seed_time_window' under the 'hycal' "
+                    "block in database/reconstruction_config.json."),
             ]
             for name, lo, hi, step, tip in cluster_fields:
                 sp = QDoubleSpinBox()
@@ -2100,9 +2424,6 @@ class HyCalEventViewer(QMainWindow):
             self._adv_defaults[f"wave_{name}"] = sp.value()
         for name, sp in self._adv_wave_int_spins.items():
             self._adv_defaults[f"wave_{name}"] = sp.value()
-        self._adv_defaults["hist_threshold"] = self._adv_hist_threshold_spin.value()
-        self._adv_defaults["time_min"] = self._adv_time_min_spin.value()
-        self._adv_defaults["time_max"] = self._adv_time_max_spin.value()
         for name, w in self._adv_cluster_spins.items():
             if isinstance(w, QCheckBox):
                 self._adv_defaults[f"cluster_{name}"] = w.isChecked()
@@ -2120,7 +2441,8 @@ class HyCalEventViewer(QMainWindow):
 
     def _reset_advanced_defaults(self):
         """Restore every Advanced-dock widget to its initial (post-load)
-        value and re-run the current event once."""
+        value and re-run the current event once.  The peak filter lives in
+        the Cut Settings dialog and has its own Reset button."""
         if not hasattr(self, "_adv_defaults"):
             return
         for name, sp in self._adv_wave_spins.items():
@@ -2131,14 +2453,6 @@ class HyCalEventViewer(QMainWindow):
             sp.blockSignals(True)
             sp.setValue(self._adv_defaults[f"wave_{name}"])
             sp.blockSignals(False)
-        self._adv_hist_threshold_spin.blockSignals(True)
-        self._adv_hist_threshold_spin.setValue(self._adv_defaults["hist_threshold"])
-        self._adv_hist_threshold_spin.blockSignals(False)
-        for spin, key in ((self._adv_time_min_spin, "time_min"),
-                           (self._adv_time_max_spin, "time_max")):
-            spin.blockSignals(True)
-            spin.setValue(self._adv_defaults[key])
-            spin.blockSignals(False)
         for name, w in self._adv_cluster_spins.items():
             w.blockSignals(True)
             if isinstance(w, QCheckBox):
@@ -2165,9 +2479,6 @@ class HyCalEventViewer(QMainWindow):
             _safe(self._wcfg, name, float(sp.value()))
         for name, sp in self._adv_wave_int_spins.items():
             _safe(self._wcfg, name, int(sp.value()))
-        self._hist_threshold = float(self._adv_hist_threshold_spin.value())
-        self._time_min = float(self._adv_time_min_spin.value())
-        self._time_max = float(self._adv_time_max_spin.value())
 
         if self._hccl is not None and self._adv_cluster_spins:
             ccfg = self._hccl.get_config()
@@ -2187,6 +2498,40 @@ class HyCalEventViewer(QMainWindow):
         """Re-read + re-analyse the current event with the latest config."""
         if self._current_idx >= 0:
             self._goto(self._current_idx)
+
+    # ---- Cut Settings dialog --------------------------------------------
+
+    def _open_cut_settings_dialog(self):
+        """Modal editor for the active peak filter — replicates the web
+        monitor's Cut Settings dialog (resources/cut_dialog.js).  On Save,
+        the new filter values replace ``self._filter`` (preserving
+        ``enable``, which stays under the toolbar's "apply" toggle) and
+        the current event is re-analysed."""
+        dlg = CutSettingsDialog(self, self._filter, self._filter_default)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_filter = dlg.result_filter()
+        new_filter.enable = self._filter.enable
+        self._filter = new_filter
+        self._rerun_current_event()
+
+    def _on_cut_apply_toggled(self, on: bool):
+        """User flipped the toolbar's "apply" checkbox — toggles
+        WaveformFilter.enable so every peak counts when off, every peak
+        is filtered when on.  Re-runs the current event to refresh hists
+        / geo / clusters."""
+        self._filter.enable = bool(on)
+        self._rerun_current_event()
+
+    def _on_cut_show_toggled(self, on: bool):
+        """User flipped the "show" checkbox — toggles overlay drawing on
+        the waveform plot only (filter values + apply state unchanged).
+        Cheap repaint, no full re-analysis."""
+        self._filter_show = bool(on)
+        if self._current_idx >= 0 and self._ch is not None:
+            self._display_waveform(self._ch.fadc())
+        else:
+            self._wave.update()
 
     def _small_btn(self, text: str, slot, primary: bool = False) -> QPushButton:
         btn = QPushButton(text)
@@ -2502,9 +2847,7 @@ class HyCalEventViewer(QMainWindow):
             f"(evio blocks: {res['total_evio']:,})"
             + mode_note
             + ("   [indexing cancelled]" if cancelled else ""))
-        self._info.setText(
-            f"threshold={self._hist_threshold:g}   "
-            f"Select a module, then click Next to start browsing.")
+        self._info.setText("Select a module, then click Next to start browsing.")
 
         self._event_spin.setMaximum(max(0, n_phys - 1))
         self._event_spin.setValue(0)
@@ -2707,8 +3050,8 @@ class HyCalEventViewer(QMainWindow):
         # fills are dedup'd via self._accumulated: an event already folded
         # in still gets re-analysed for display, but isn't counted again.
         sel_peaks: List[Peak] = []
-        threshold = self._hist_threshold
         wcfg = self._wcfg
+        flt = self._filter
         sel_key = self._selected_key
         idx = self._current_idx
         already = (self._accumulated is not None and 0 <= idx < self._accumulated.size
@@ -2717,9 +3060,9 @@ class HyCalEventViewer(QMainWindow):
 
         current_vals: Dict[str, float] = {}   # module_name -> max peak integral
         module_energies: Dict[str, float] = {}  # name -> MeV (cluster tab)
-        # Modules where the analyser found at least one peak that didn't
-        # pass the threshold/time-window cut.  Drives the geo tooltip so
-        # users can tell "no signal" apart from "rejected by filter".
+        # Modules where the analyser found at least one peak rejected by
+        # the active filter — drives the geo tooltip so users can tell
+        # "no signal" apart from "rejected by filter".
         rejected_current: set = set()
 
         # Reset clustering state for this event.
@@ -2743,18 +3086,16 @@ class HyCalEventViewer(QMainWindow):
                     _, _, peaks = analyze(samples, wcfg)
                     if key == sel_key:
                         sel_peaks = peaks
-                    # Pick the best peak inside the time-cut window;
-                    # matches viewer_utils.h::bestPeakInWindow.  Track the
-                    # best peak's time too — HyCalCluster.add_hit needs it
-                    # for the multi-pulse seed-time gating in 0dafbae.
+                    # Pick the best (highest-integral) peak that passes the
+                    # active filter; matches viewer_utils.h::bestPeakInWindow
+                    # plus the integral/height/quality cuts in PeakFilter.
+                    # ``best_time`` is needed for HyCalCluster.add_hit's
+                    # multi-pulse seed-time gating (commit 0dafbae).
                     best_int = 0.0
                     best_time = 0.0
-                    any_peak = False
+                    any_peak = len(peaks) > 0
                     for p in peaks:
-                        if p.height < threshold:
-                            continue
-                        any_peak = True
-                        if not (self._time_min <= p.time <= self._time_max):
+                        if not flt.passes(p):
                             continue
                         if p.integral > best_int:
                             best_int = p.integral
@@ -2782,9 +3123,7 @@ class HyCalEventViewer(QMainWindow):
                         continue
                     kept = 0
                     for p in peaks:
-                        if p.height < threshold:
-                            continue
-                        if not (self._time_min <= p.time <= self._time_max):
+                        if not flt.passes(p):
                             continue
                         hits.height.fill(p.height)
                         hits.integral.fill(p.integral)
@@ -2945,9 +3284,8 @@ class HyCalEventViewer(QMainWindow):
                                    f"slot={slot}  ch={ch}"),
                             clk_mhz=self._wcfg.clk_mhz,
                             stack_key=stack_key,
-                            time_min=self._time_min,
-                            time_max=self._time_max,
-                            min_height=self._hist_threshold)
+                            filter=self._filter,
+                            filter_show=self._filter_show)
 
     def _clear_hists(self):
         self._h_height.clear("Peak Height")
@@ -2994,7 +3332,7 @@ class HyCalEventViewer(QMainWindow):
             daq_config_path=self._daq_cfg_path,
             index=self._index, start_idx=start_idx, count=count,
             channels=self._channels, wcfg=self._wcfg,
-            hist_threshold=self._hist_threshold,
+            peak_filter=self._filter,
             accept_mask=self._accept_mask, reject_mask=self._reject_mask,
             accumulated=self._accumulated,
         )
@@ -3089,7 +3427,8 @@ class HyCalEventViewer(QMainWindow):
                                   "step": self._p_cfg["step"]},
                 "npeaks_hist":   {"min": self._n_cfg["min"], "max": self._n_cfg["max"],
                                   "step": self._n_cfg["step"]},
-                "threshold":     self._hist_threshold,
+                "filter":        self._filter.to_json(),
+                "filter_active": self._filter.enable,
                 "wave_config":   self._wcfg.__dict__.copy(),
                 "channels":      {},
             }
