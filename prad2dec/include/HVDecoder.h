@@ -80,6 +80,15 @@ struct Interval {
 };
 
 // -------------------------------------------------------------------------
+// (No EventPin struct needed for associate_events any more.)  Anchor
+// scalars (anchor_ti_ticks, anchor_unix_time_ms) come straight from any
+// SYNC scaler row — they pin the linear ti_ticks ↔ unix_time mapping
+// (1 ms = 250 000 four-nanosecond ticks).  All event_number /
+// ti_ticks_at_arrival values then come from the recon tree's actual
+// (event_num, timestamp) entries — no interpolation across events.
+// -------------------------------------------------------------------------
+
+// -------------------------------------------------------------------------
 // HVSegment — one materialized time × channel window.
 //
 // Layout mirrors VMDF v2: dv is row-major (n_snapshots × n_channels) and
@@ -142,6 +151,52 @@ public:
     LookupResult nearest_next (const std::string &name, double unix_time,
                                Kind kind = Kind::VMon) const
     { return value_at(name, unix_time, kind, Side::Next); }
+
+    // ── event association ───────────────────────────────────────────────
+    //
+    // Tag every entry in `snapshot_ts_ms` (HV snapshots, or booster
+    // snapshots — caller's choice) with the (event_number, ti_ticks)
+    // of the most recent physics event before it.  Same contract as the
+    // `epics` tree's `event_number_at_arrival` / `ti_ticks_at_arrival`.
+    //
+    // Inputs:
+    //   * snapshot_ts_ms      — the times to associate, in epoch ms.
+    //                           For HV pass `timestamps_ms`; for booster
+    //                           pass `booster_timestamps_ms`.
+    //   * event_num           — recon (or events) tree's `event_num`
+    //                           branch, one entry per physics event.
+    //   * event_ti_ticks      — recon's `timestamp` branch (TI 4-ns ticks),
+    //                           sorted ascending and parallel to event_num.
+    //   * anchor_ti_ticks /
+    //     anchor_unix_time_ms — any SYNC scaler row's (ti_ticks, unix_time)
+    //                           pair.  Defines the linear conversion
+    //                           target_ticks = anchor_ti_ticks
+    //                                       + (snapshot_ts_ms[i] - anchor_unix_time_ms)
+    //                                       * 250 000.
+    //
+    // For each snapshot we compute target_ticks and pick the event with
+    // the largest ti_ticks ≤ target_ticks.  Snapshots that fall before
+    // the first event get event_number = -1, ti_ticks = -1 (sentinel for
+    // "no physics event yet").  Snapshots after the last event clamp to
+    // the last event.
+    //
+    // The single anchor is exact for the TI clock by construction (4 ns/
+    // tick from a monotonic counter).  It only drifts against unix_time
+    // through the system clock; for run-scale windows that drift is well
+    // below one HV poll interval (200 ms), so a single anchor suffices.
+    static constexpr int64_t TICKS_PER_MS = 250000;  // 4-ns ticks per millisecond
+
+    struct EventAssoc {
+        std::vector<int32_t> event_number;   // size == snapshot_ts_ms.size()
+        std::vector<int64_t> ti_ticks;
+    };
+
+    static EventAssoc associate_events(
+        const std::vector<int64_t> &snapshot_ts_ms,
+        const std::vector<int32_t> &event_num,
+        const std::vector<int64_t> &event_ti_ticks,
+        int64_t anchor_ti_ticks,
+        int64_t anchor_unix_time_ms);
 
     // ── stable-interval finder ──────────────────────────────────────────
     //

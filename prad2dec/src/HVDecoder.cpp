@@ -770,6 +770,52 @@ LookupResult HVSegment::value_at(const std::string &name,
                         double(val)};
 }
 
+HVSegment::EventAssoc
+HVSegment::associate_events(const std::vector<int64_t> &snapshot_ts_ms,
+                             const std::vector<int32_t> &event_num,
+                             const std::vector<int64_t> &event_ti_ticks,
+                             int64_t anchor_ti_ticks,
+                             int64_t anchor_unix_time_ms)
+{
+    const std::size_t n = snapshot_ts_ms.size();
+    EventAssoc out;
+    out.event_number.assign(n, -1);
+    out.ti_ticks    .assign(n, -1);
+    if (n == 0) return out;
+
+    if (event_num.size() != event_ti_ticks.size())
+        throw std::invalid_argument(
+            "HVSegment::associate_events: event_num.size() != "
+            "event_ti_ticks.size()");
+    if (event_num.empty()) {
+        // No events available — every snapshot stays at the -1 sentinel.
+        return out;
+    }
+
+    for (std::size_t i = 0; i < n; ++i) {
+        // Convert snapshot's wall-clock to TI ticks via the anchor:
+        //   target = anchor_ti_ticks
+        //          + (snapshot_ts_ms - anchor_unix_time_ms) * 250 000
+        int64_t target_ticks = anchor_ti_ticks
+            + (snapshot_ts_ms[i] - anchor_unix_time_ms) * TICKS_PER_MS;
+
+        // Largest event index whose ti_ticks ≤ target_ticks.
+        auto it = std::upper_bound(event_ti_ticks.begin(),
+                                   event_ti_ticks.end(),
+                                   target_ticks);
+        std::ptrdiff_t idx = (it - event_ti_ticks.begin()) - 1;
+
+        if (idx < 0) {
+            // Before any physics event — keep the -1 sentinel so callers
+            // can filter pad-period rows downstream.
+            continue;
+        }
+        out.event_number[i] = event_num    [idx];
+        out.ti_ticks    [i] = event_ti_ticks[idx];
+    }
+    return out;
+}
+
 std::vector<Interval>
 HVSegment::find_stable_intervals(const std::vector<std::string> &cn_check,
                                   double window_s,

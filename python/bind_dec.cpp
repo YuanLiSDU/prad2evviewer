@@ -1530,6 +1530,61 @@ void bind_hv(py::module_ &m)
              "First snapshot at-or-after the query time. HVLookupResult; "
              ".ok=False if the query is past the last snapshot.")
 
+        // (event_num, event_ti_ticks, anchor) → per-snapshot event tag.
+        .def_static("associate_events",
+            [](py::array_t<int64_t> snapshot_ts_ms,
+               py::array_t<int32_t> event_num,
+               py::array_t<int64_t> event_ti_ticks,
+               int64_t anchor_ti_ticks,
+               int64_t anchor_unix_time_ms) {
+                auto sn = snapshot_ts_ms .unchecked<1>();
+                auto en = event_num      .unchecked<1>();
+                auto tt = event_ti_ticks .unchecked<1>();
+                if (en.shape(0) != tt.shape(0))
+                    throw std::invalid_argument(
+                        "associate_events: event_num and event_ti_ticks "
+                        "must be the same length");
+                std::vector<int64_t> snaps(sn.shape(0));
+                for (py::ssize_t i = 0; i < sn.shape(0); ++i)
+                    snaps[i] = sn(i);
+                std::vector<int32_t> ens(en.shape(0));
+                std::vector<int64_t> tts(tt.shape(0));
+                for (py::ssize_t i = 0; i < en.shape(0); ++i) {
+                    ens[i] = en(i);
+                    tts[i] = tt(i);
+                }
+                auto assoc = hv::HVSegment::associate_events(
+                    snaps, ens, tts,
+                    anchor_ti_ticks, anchor_unix_time_ms);
+
+                py::array_t<int32_t> ev_arr(assoc.event_number.size());
+                py::array_t<int64_t> tk_arr(assoc.ti_ticks.size());
+                std::copy(assoc.event_number.begin(),
+                          assoc.event_number.end(),  ev_arr.mutable_data());
+                std::copy(assoc.ti_ticks.begin(),
+                          assoc.ti_ticks.end(),      tk_arr.mutable_data());
+                return py::make_tuple(ev_arr, tk_arr);
+            },
+            py::arg("snapshot_ts_ms"),
+            py::arg("event_num"),
+            py::arg("event_ti_ticks"),
+            py::arg("anchor_ti_ticks"),
+            py::arg("anchor_unix_time_ms"),
+            "Associate each entry of `snapshot_ts_ms` (epoch ms — typically "
+            "seg.timestamps_ms or seg.booster_timestamps_ms) with the most "
+            "recent physics event.\n\n"
+            "Inputs:\n"
+            "  snapshot_ts_ms      : int64 1-D array of times to tag.\n"
+            "  event_num           : int32 1-D array, recon `event_num` branch.\n"
+            "  event_ti_ticks      : int64 1-D array, recon `timestamp` branch\n"
+            "                        (TI 4-ns ticks, sorted ascending).\n"
+            "  anchor_ti_ticks,\n"
+            "  anchor_unix_time_ms : any SYNC scaler row's (ti_ticks, unix_time*1000)\n"
+            "                        — pins the linear ti_ticks ↔ unix mapping.\n\n"
+            "Returns (event_number_per_snap int32, ti_ticks_per_snap int64).\n"
+            "Snapshots before the first event get -1 sentinels; snapshots "
+            "after the last event clamp to the last event.")
+
         // Stable-interval finder
         .def("find_stable_intervals",
             [](const hv::HVSegment &self,
