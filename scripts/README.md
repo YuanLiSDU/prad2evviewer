@@ -373,11 +373,11 @@ while ch.read() == dec.Status.success:
         # HyCal — feed per-module energies (e.g. from ch.fadc() + your
         # calibration), then cluster:
         # hcl.clear()
-        # for module_idx, energy_mev in my_hycal_hits(ch.fadc()):
-        #     hcl.add_hit(module_idx, energy_mev)
+        # for module_idx, energy_mev, time_ns in my_hycal_hits(ch.fadc()):
+        #     hcl.add_hit(module_idx, energy_mev, time_ns)
         # hcl.form_clusters()
         # for c in hcl.reconstruct_hits():
-        #     print("HyCal", c.center_id, c.x, c.y, c.energy)
+        #     print("HyCal", c.center_id, c.x, c.y, c.energy, c.time)
 ```
 
 `prad2py.load_tdc_hits(path, ...)` remains the convenience entry point

@@ -23,7 +23,7 @@
         "// Each axis (time/integral/height) is optional; omit a min/max to drop that side.": "",
         "// quality_bits.{accept,reject} reference the Q_PEAK_* palette in /api/config.": "",
         "filter": {
-            "time": {"min": 160, "max": 220}
+            "time": {"min": 80, "max": 280}
         },
         "height_hist": {
             "min": 0, "max": 4000, "step": 10,

@@ -731,6 +731,13 @@ class WaveformPlotWidget(QWidget):
         self._ped_rms: float = 0.0
         self._title: str = ""
         self._clk_mhz: float = 250.0
+        # Filter cuts: peaks outside [time_min, time_max] ns or below
+        # min_height (ADC, sample−pedestal) don't contribute to the geo's
+        # max-integral / histograms.  Drawn as dim overlays so the user can
+        # see why an otherwise-shaded peak isn't reflected in the geo view.
+        self._time_min: Optional[float] = None
+        self._time_max: Optional[float] = None
+        self._min_height: Optional[float] = None
 
         # --- stack mode state ---
         self._stack_enabled: bool = False
@@ -769,7 +776,10 @@ class WaveformPlotWidget(QWidget):
     def set_data(self, samples: np.ndarray, peaks: List[Peak],
                  ped_mean: float, ped_rms: float,
                  title: str, clk_mhz: float = 250.0,
-                 stack_key: Optional[str] = None):
+                 stack_key: Optional[str] = None,
+                 time_min: Optional[float] = None,
+                 time_max: Optional[float] = None,
+                 min_height: Optional[float] = None):
         samples = np.asarray(samples, dtype=np.float32)
         self._samples = samples
         self._peaks = peaks
@@ -777,6 +787,15 @@ class WaveformPlotWidget(QWidget):
         self._ped_rms  = ped_rms
         self._title = title
         self._clk_mhz = clk_mhz
+        # Treat sentinel values (the wide-open defaults) as "no cut": the
+        # viewer seeds time_min=-1e30 / time_max=1e30 when monitor_config
+        # has no filter.time block.
+        self._time_min   = time_min if (time_min is not None
+                                        and time_min > -1e20) else None
+        self._time_max   = time_max if (time_max is not None
+                                        and time_max <  1e20) else None
+        self._min_height = (min_height if (min_height is not None
+                                           and min_height > 0) else None)
 
         if self._stack_enabled:
             key = stack_key if stack_key is not None else title
@@ -895,6 +914,23 @@ class WaveformPlotWidget(QWidget):
 
     # --- single-event (default) view ---------------------------------
 
+    def _peak_passes(self, pk) -> bool:
+        """True if peak satisfies the active height + time-window cuts.
+
+        Mirrors the filter applied in HyCalEventViewer._accumulate_and_display
+        when picking the per-channel max integral; peaks that fail this test
+        are still drawn but with reduced alpha so the user can see why the
+        geo view / tooltip don't reflect them.
+        """
+        if self._min_height is not None and pk.height < self._min_height:
+            return False
+        t = float(pk.time)
+        if self._time_min is not None and t < self._time_min:
+            return False
+        if self._time_max is not None and t > self._time_max:
+            return False
+        return True
+
     def _paint_single(self, p: QPainter, r: QRectF):
         n = self._samples.size
         if n < 2:
@@ -917,6 +953,35 @@ class WaveformPlotWidget(QWidget):
         def to_sy(v: float) -> float:
             return r.bottom() - (v - ymin) / (ymax - ymin) * r.height()
 
+        # ---- cut-region overlays (drawn first, low layer) ---------------
+        # Mirrors xRangeShapes / yRangeShapes in resources/waveform.js: the
+        # regions outside the [time_min, time_max] / above-min_height cuts
+        # are shaded so it's visible *on the waveform* why a given peak
+        # doesn't contribute to the geo-view max integral.
+        ns_total = (n - 1) * 1000.0 / self._clk_mhz if self._clk_mhz > 0 else 0.0
+        cut_fill = QColor(THEME.TEXT_MUTED); cut_fill.setAlphaF(0.18)
+        cut_edge = QColor(THEME.HIGHLIGHT)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(cut_fill)
+        if ns_total > 0 and self._time_min is not None and self._time_min > 0:
+            x1 = to_sx((self._time_min * self._clk_mhz / 1000.0))
+            x1 = min(max(x1, r.left()), r.right())
+            if x1 > r.left():
+                p.fillRect(QRectF(r.left(), r.top(),
+                                  x1 - r.left(), r.height()), cut_fill)
+                p.setPen(QPen(cut_edge, 1, Qt.PenStyle.DashLine))
+                p.drawLine(int(x1), int(r.top()), int(x1), int(r.bottom()))
+                p.setPen(Qt.PenStyle.NoPen)
+        if ns_total > 0 and self._time_max is not None and self._time_max < ns_total:
+            x2 = to_sx((self._time_max * self._clk_mhz / 1000.0))
+            x2 = min(max(x2, r.left()), r.right())
+            if x2 < r.right():
+                p.fillRect(QRectF(x2, r.top(),
+                                  r.right() - x2, r.height()), cut_fill)
+                p.setPen(QPen(cut_edge, 1, Qt.PenStyle.DashLine))
+                p.drawLine(int(x2), int(r.top()), int(x2), int(r.bottom()))
+                p.setPen(Qt.PenStyle.NoPen)
+
         # pedestal baseline
         y_ped = to_sy(self._ped_mean) if self._ped_mean != 0 else None
         if y_ped is not None:
@@ -927,13 +992,33 @@ class WaveformPlotWidget(QWidget):
             y_thr = to_sy(thr_v)
             p.setPen(QPen(QColor(THEME.TEXT_MUTED), 1, Qt.PenStyle.DotLine))
             p.drawLine(int(r.left()), int(y_thr), int(r.right()), int(y_thr))
+            # height-cut shade (filter floor on peak height, ADC sample−ped).
+            # Drawn only when min_height > the analyser's per-event detection
+            # threshold (otherwise the dotted-line is already the binding cut).
+            if self._min_height is not None:
+                hcut_v = self._ped_mean + self._min_height
+                if hcut_v > thr_v:
+                    y_hcut = to_sy(hcut_v)
+                    y_hcut = min(max(y_hcut, r.top()), r.bottom())
+                    if y_hcut > r.top():
+                        p.setPen(Qt.PenStyle.NoPen)
+                        p.fillRect(QRectF(r.left(), y_hcut,
+                                          r.width(), r.bottom() - y_hcut),
+                                   cut_fill)
+                        p.setPen(QPen(cut_edge, 1, Qt.PenStyle.DashLine))
+                        p.drawLine(int(r.left()), int(y_hcut),
+                                   int(r.right()), int(y_hcut))
 
         # Fill the integral area (between pedestal and waveform) per peak,
         # colour-coded from _PEAK_PALETTE. Mirrors resources/waveform.js.
+        # Peaks rejected by the active filter are drawn with reduced alpha
+        # so the user can tell at a glance which peaks the geo / hists use.
         if self._peaks and y_ped is not None:
             for i, pk in enumerate(self._peaks):
+                passes = self._peak_passes(pk)
                 base = QColor(self._PEAK_PALETTE[i % len(self._PEAK_PALETTE)])
-                fill = QColor(base); fill.setAlphaF(0.18)
+                fill = QColor(base)
+                fill.setAlphaF(0.18 if passes else 0.06)
                 poly = QPolygonF()
                 j = max(0, int(pk.left))
                 j_end = min(n - 1, int(pk.right))
@@ -947,7 +1032,10 @@ class WaveformPlotWidget(QWidget):
                 p.setBrush(fill)
                 p.drawPolygon(poly)
                 # outline the peak section with the solid palette colour
-                p.setPen(QPen(base, 2))
+                outline = QColor(base)
+                if not passes:
+                    outline.setAlphaF(0.45)
+                p.setPen(QPen(outline, 2))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 for k in range(j, j_end):
                     p.drawLine(QPointF(to_sx(k),
@@ -961,14 +1049,18 @@ class WaveformPlotWidget(QWidget):
             p.drawLine(int(to_sx(i)),     int(to_sy(float(self._samples[i]))),
                        int(to_sx(i + 1)), int(to_sy(float(self._samples[i + 1]))))
 
-        # peak markers (diamonds, coloured per peak)
+        # peak markers (diamonds, coloured per peak; rejected peaks get a
+        # hollow diamond to keep them readable but visually distinct).
         if self._peaks:
             for i, pk in enumerate(self._peaks):
                 if pk.pos < 0 or pk.pos >= n:
                     continue
+                passes = self._peak_passes(pk)
                 col = QColor(self._PEAK_PALETTE[i % len(self._PEAK_PALETTE)])
+                if not passes:
+                    col.setAlphaF(0.55)
                 p.setPen(QPen(col, 1.2))
-                p.setBrush(col)
+                p.setBrush(col if passes else Qt.BrushStyle.NoBrush)
                 cx = to_sx(pk.pos)
                 cy = to_sy(float(self._samples[pk.pos]))
                 diamond = QPolygonF([
@@ -1121,12 +1213,16 @@ class WaveformGeoView(HyCalMapWidget):
         self._mode = self.MODE_CURRENT
         self._current_vals: Dict[str, float] = {}
         self._overall_vals: Dict[str, float] = {}
-        # Headless range controller: handles auto-fit logic and locks vmin
-        # at 0 (occupancy and per-event integrals both start at zero).
-        # Inline-clicking the max value on the colorbar lets the user
-        # override the range without any extra UI.
+        # Modules where the analyser found peaks in the current event but
+        # all of them were rejected by the threshold / time-window cut —
+        # i.e. they appear as shaded peaks on the waveform plot but don't
+        # contribute to the geo's max-integral.  Used by _tooltip_text.
+        self._rejected_current: set = set()
+        # Headless range controller: handles auto-fit logic.  Both vmin and
+        # vmax are inline-editable on the colorbar so the user can pin the
+        # palette to a fixed range when comparing events.
         self._range_ctrl = ColorRangeController(
-            self, auto_fit="minmax", min_fixed=0.0, parent=self)
+            self, auto_fit="minmax", parent=self)
 
         # Top-left mode toggle.  Default label matches MODE_CURRENT.
         self._mode_btn = QPushButton("Current", self)
@@ -1161,6 +1257,12 @@ class WaveformGeoView(HyCalMapWidget):
         self._current_vals = vals
         if self._mode == self.MODE_CURRENT:
             self._apply_mode_values()
+
+    def set_rejected_current(self, names: set):
+        """Modules where the current event had peaks rejected by the cut.
+        Pass an empty set to clear.  Drives the tooltip wording so users can
+        tell "no peak" apart from "peak rejected by filter"."""
+        self._rejected_current = set(names) if names else set()
 
     def set_overall_values(self, vals: Dict[str, float]):
         self._overall_vals = vals
@@ -1232,6 +1334,13 @@ class WaveformGeoView(HyCalMapWidget):
         unit = ("occupancy" if self._mode == self.MODE_OVERALL
                 else "max integral")
         if v is None:
+            # In Current mode, distinguish "no peak found" from "peak found
+            # but rejected by the threshold/time cut" — the latter is what
+            # confused the user when the waveform plot shows shaded peaks
+            # but the geo / tooltip shows nothing.
+            if (self._mode == self.MODE_CURRENT
+                    and name in self._rejected_current):
+                return f"{name}  ({unit}: — peak outside cut)"
             return f"{name}  ({unit}: —)"
         return f"{name}  {unit}={v:.3g}"
 
@@ -1543,7 +1652,8 @@ class HyCalEventViewer(QMainWindow):
                  reject_mask: int,
                  daq_config_path: str,
                  hycal_modules: Optional[List] = None,
-                 hycal_map_path: Optional[str] = None):
+                 hycal_map_path: Optional[str] = None,
+                 recon_config_path: Optional[str] = None):
         super().__init__()
         self._hist_config   = hist_config
         self._daq_map       = daq_map
@@ -1553,6 +1663,7 @@ class HyCalEventViewer(QMainWindow):
         self._daq_cfg_path  = daq_config_path
         self._hycal_modules = hycal_modules or []
         self._hycal_map_path = hycal_map_path
+        self._recon_cfg_path = recon_config_path
 
         # Bin configs — merge user config with defaults, add n-peaks hist
         self._h_cfg = hist_config.get("height_hist",
@@ -1630,30 +1741,24 @@ class HyCalEventViewer(QMainWindow):
         self._batch_worker: Optional[BatchWorker] = None
         self._batch_thread: Optional[QThread] = None
 
-        # HyCal clustering — init once, reused each event.  Keep a cache
-        # keyed by (crate, slot, ch) so per-channel module lookups don't
-        # trip into C++ through the GIL on every hit.
+        # HyCal clustering — wired up via prad2py.det.PipelineBuilder so the
+        # daq / recon / runinfo configs and per-run HyCal calibration are all
+        # loaded automatically (matches the live server / analysis scripts).
+        # `_pipeline` keeps the C++ Pipeline object alive; the borrowed
+        # `hycal` reference is stored separately as `_hcsys` for the existing
+        # call sites (`module_by_daq`, `load_calibration`, …).  Per-channel
+        # DAQ → module lookups are cached by (crate, slot, ch) so the
+        # per-event hot loop doesn't go through pybind11 every hit.
+        self._pipeline = None
         self._hcsys = None
         self._hccl  = None
         self._hc_cache: Dict[Tuple[int, int, int], object] = {}
-        # True once LoadCalibration has been called with >0 matches.
+        # True once a calibration file has actually been loaded (either via
+        # PipelineBuilder's runinfo lookup or the manual menu override).
         # Gates the "no calibration" warning banner on the cluster tab.
         self._hycal_calib_loaded = False
-        if _HAVE_PRAD2PY and self._hycal_map_path:
-            try:
-                self._hcsys = prad2py.det.HyCalSystem()
-                ok = self._hcsys.init(str(self._hycal_map_path))
-                if ok:
-                    self._hccl = prad2py.det.HyCalCluster(self._hcsys)
-                else:
-                    print("[hycal] HyCalSystem.init returned False — "
-                          "cluster tab will be empty", file=sys.stderr)
-                    self._hcsys = None
-            except Exception as e:
-                print(f"[hycal] init failed: {type(e).__name__}: {e}",
-                      file=sys.stderr)
-                self._hcsys = None
-                self._hccl  = None
+        if not self._build_hycal_pipeline():
+            self._hycal_init_fallback()
 
         apply_theme_palette(self)
         self._build_ui()
@@ -2133,6 +2238,139 @@ class HyCalEventViewer(QMainWindow):
         a_adv.setShortcut("Ctrl+T")
         mv.addAction(a_adv)
 
+    # -- HyCal pipeline (PipelineBuilder) ------------------------------
+
+    def _guess_database_dir(self) -> Optional[str]:
+        """Pick a database dir for resolving recon-config-internal paths
+        (e.g., 'runinfo': 'runinfo/2p1_general.json').  We prefer the
+        parent of whichever full-path config the user actually pointed at
+        — recon, daq, hycal-map, in that order — so the resolved paths
+        stay self-consistent with the rest of their tree."""
+        for p in (self._recon_cfg_path, self._daq_cfg_path,
+                  self._hycal_map_path):
+            if p:
+                parent = Path(p).expanduser().resolve().parent
+                if parent.is_dir():
+                    return str(parent)
+        return None
+
+    def _build_hycal_pipeline(self, evio_path: Optional[str] = None) -> bool:
+        """Wire up HyCal via prad2py.det.PipelineBuilder.
+
+        Pulls daq / recon / runinfo / map / per-run calibration from the
+        configured paths so cluster energies are populated without a
+        manual ``Load HyCal calibration…`` step.  ``evio_path`` lets the
+        builder pick the right run number from the file name (otherwise
+        it uses the latest entry in runinfo).
+
+        Returns True on success, False if the build raised — callers
+        should then drop back to ``_hycal_init_fallback`` so the rest
+        of the viewer still functions for waveform-only browsing.
+        """
+        if not _HAVE_PRAD2PY:
+            return False
+        try:
+            b = prad2py.det.PipelineBuilder()
+            # Anchor relative paths inside recon_config (e.g. "runinfo": …)
+            # to whichever directory the configs we were given live in,
+            # otherwise the builder resolves them against CWD and silently
+            # drops calibration when run from outside the repo.
+            db_dir = self._guess_database_dir()
+            if db_dir:
+                b.set_database_dir(db_dir)
+            if self._daq_cfg_path:
+                b.set_daq_config(self._daq_cfg_path)
+            if self._recon_cfg_path:
+                b.set_recon_config(self._recon_cfg_path)
+            if self._hycal_map_path:
+                b.set_hycal_map(self._hycal_map_path)
+            if evio_path:
+                b.set_run_number_from_evio(str(evio_path))
+            pipeline = b.build()
+        except Exception as exc:                      # noqa: BLE001
+            print(f"[hycal] PipelineBuilder.build failed: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr)
+            return False
+
+        self._pipeline = pipeline
+        self._hcsys = pipeline.hycal
+        self._hccl = prad2py.det.HyCalCluster(pipeline.hycal)
+        try:
+            self._hccl.set_config(pipeline.hycal_cluster_cfg)
+        except Exception as exc:                      # noqa: BLE001
+            print(f"[hycal] HyCalCluster.set_config failed: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        self._hc_cache.clear()
+        # PipelineBuilder leaves hycal_calib_path empty when no calibration
+        # file resolved (no runinfo / no energy_calib_file).  Truthy =
+        # calibration actually loaded → suppress the cluster-tab warning.
+        self._hycal_calib_loaded = bool(getattr(pipeline, "hycal_calib_path", "")
+                                        or "")
+        # Sync the Advanced dock's cluster spinboxes to the new config so
+        # the user sees the values that actually drive reconstruction.
+        # `hasattr` guard: this also runs from __init__ before the dock exists.
+        if hasattr(self, "_adv_cluster_spins"):
+            self._sync_advanced_dock_cluster_cfg()
+        if hasattr(self, "_calib_warn_lbl"):
+            self._calib_warn_lbl.setVisible(not self._hycal_calib_loaded)
+        return True
+
+    def _hycal_init_fallback(self) -> bool:
+        """Fallback to a plain HyCalSystem.init when PipelineBuilder fails
+        (e.g., daq_config missing).  Provides geometry-only operation: no
+        calibration, so cluster energies stay at 0 until the user picks a
+        file via File → Load HyCal calibration…"""
+        self._pipeline = None
+        if not (_HAVE_PRAD2PY and self._hycal_map_path):
+            self._hcsys = None
+            self._hccl = None
+            return False
+        try:
+            sys_obj = prad2py.det.HyCalSystem()
+            if not sys_obj.init(str(self._hycal_map_path)):
+                print("[hycal] HyCalSystem.init returned False — "
+                      "cluster tab will be empty", file=sys.stderr)
+                self._hcsys = None
+                self._hccl = None
+                return False
+            self._hcsys = sys_obj
+            self._hccl = prad2py.det.HyCalCluster(sys_obj)
+        except Exception as exc:                      # noqa: BLE001
+            print(f"[hycal] init failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            self._hcsys = None
+            self._hccl = None
+            return False
+        self._hc_cache.clear()
+        self._hycal_calib_loaded = False
+        return True
+
+    def _sync_advanced_dock_cluster_cfg(self):
+        """Refresh the Advanced-dock cluster spinboxes from _hccl's config.
+        Called after a pipeline rebuild so the dock matches the new run's
+        recon-config defaults instead of stale values."""
+        if self._hccl is None or not getattr(self, "_adv_cluster_spins", None):
+            return
+        try:
+            ccfg = self._hccl.get_config()
+        except Exception:
+            return
+        for name, widget in self._adv_cluster_spins.items():
+            try:
+                v = getattr(ccfg, name)
+            except AttributeError:
+                continue
+            widget.blockSignals(True)
+            try:
+                if isinstance(widget, QCheckBox):
+                    widget.setChecked(bool(v))
+                elif isinstance(widget, QSpinBox):
+                    widget.setValue(int(v))
+                else:
+                    widget.setValue(float(v))
+            finally:
+                widget.blockSignals(False)
+
     # -- file open --
 
     def _open_evio_dialog(self):
@@ -2199,6 +2437,12 @@ class HyCalEventViewer(QMainWindow):
         self._current_idx = -1
         self._accumulated = None
         self._clear_plots()
+
+        # Rebuild the HyCal pipeline against this evio's run number so the
+        # right per-run calibration is loaded.  Failures fall back to
+        # whatever pipeline / map-only state was already in place — the
+        # waveform side keeps working regardless.
+        self._build_hycal_pipeline(evio_path=str(path))
 
         # Start indexer
         dlg = QProgressDialog(f"Indexing {path.name} …", "Cancel", 0, 100, self)
@@ -2473,6 +2717,10 @@ class HyCalEventViewer(QMainWindow):
 
         current_vals: Dict[str, float] = {}   # module_name -> max peak integral
         module_energies: Dict[str, float] = {}  # name -> MeV (cluster tab)
+        # Modules where the analyser found at least one peak that didn't
+        # pass the threshold/time-window cut.  Drives the geo tooltip so
+        # users can tell "no signal" apart from "rejected by filter".
+        rejected_current: set = set()
 
         # Reset clustering state for this event.
         if self._hccl is not None:
@@ -2496,30 +2744,38 @@ class HyCalEventViewer(QMainWindow):
                     if key == sel_key:
                         sel_peaks = peaks
                     # Pick the best peak inside the time-cut window;
-                    # matches viewer_utils.h::bestPeakInWindow.
+                    # matches viewer_utils.h::bestPeakInWindow.  Track the
+                    # best peak's time too — HyCalCluster.add_hit needs it
+                    # for the multi-pulse seed-time gating in 0dafbae.
                     best_int = 0.0
+                    best_time = 0.0
+                    any_peak = False
                     for p in peaks:
                         if p.height < threshold:
                             continue
+                        any_peak = True
                         if not (self._time_min <= p.time <= self._time_max):
                             continue
                         if p.integral > best_int:
                             best_int = p.integral
+                            best_time = float(p.time)
                     max_int = best_int
                     if max_int > 0 and hits.module:
                         current_vals[hits.module] = max_int
+                    elif any_peak and hits.module:
+                        rejected_current.add(hits.module)
 
                     # Feed the cluster tab: resolve channel → HyCal module
-                    # and push (module_idx, energy_MeV).  Without a gain
-                    # file loaded, cal_factor==0 → energize returns 0 →
-                    # no clusters form; the cluster tab surfaces a
+                    # and push (module_idx, energy_MeV, time_ns).  Without
+                    # calibration loaded, cal_factor==0 → energize returns
+                    # 0 → no clusters form; the cluster tab surfaces a
                     # warning banner (File → Load HyCal calibration…).
                     if self._hccl is not None and crate is not None and max_int > 0:
                         mod = self._resolve_hycal_module(crate, s, c, key)
                         if mod is not None:
                             energy = mod.energize(max_int)
                             if energy > 0:
-                                self._hccl.add_hit(mod.index, energy)
+                                self._hccl.add_hit(mod.index, energy, best_time)
                                 module_energies[mod.name] = energy
 
                     if not do_fill:
@@ -2542,6 +2798,7 @@ class HyCalEventViewer(QMainWindow):
         if do_fill and self._accumulated is not None and 0 <= idx < self._accumulated.size:
             self._accumulated[idx] = True
 
+        self._geo.set_rejected_current(rejected_current)
         self._geo.set_current_values(current_vals)
         # Overall occupancy only needs refreshing when hists actually changed.
         if do_fill:
@@ -2687,7 +2944,10 @@ class HyCalEventViewer(QMainWindow):
                             title=(f"{mod}   roc=0x{roc_tag:02X}  "
                                    f"slot={slot}  ch={ch}"),
                             clk_mhz=self._wcfg.clk_mhz,
-                            stack_key=stack_key)
+                            stack_key=stack_key,
+                            time_min=self._time_min,
+                            time_max=self._time_max,
+                            min_height=self._hist_threshold)
 
     def _clear_hists(self):
         self._h_height.clear("Peak Height")
@@ -2887,6 +3147,11 @@ def main():
     ap.add_argument("--hycal-map", type=Path,
                     default=_REPO_DIR / "database" / "hycal_map.json",
                     help="hycal_map.json (module geometry + DAQ map).")
+    ap.add_argument("--recon-config", type=Path,
+                    default=_REPO_DIR / "database" / "reconstruction_config.json",
+                    help="reconstruction_config.json (runinfo pointer + "
+                         "HyCal cluster config).  Resolved by PipelineBuilder "
+                         "to load the per-run HyCal calibration automatically.")
     ap.add_argument("--trigger-bits", type=Path,
                     default=_REPO_DIR / "database" / "trigger_bits.json",
                     help="trigger_bits.json (for --accept/--reject-trigger).")
@@ -2918,15 +3183,17 @@ def main():
 
     app = QApplication(sys.argv)
     win = HyCalEventViewer(
-        hist_config     = hist_cfg,
-        daq_map         = daq_map,
-        roc_to_crate    = roc_to_crate,
-        accept_mask     = accept_mask,
-        reject_mask     = reject_mask,
-        daq_config_path = str(args.daq_config) if args.daq_config.is_file() else "",
-        hycal_modules   = hycal_modules,
-        hycal_map_path  = (str(args.hycal_map)
-                           if args.hycal_map.is_file() else None),
+        hist_config       = hist_cfg,
+        daq_map           = daq_map,
+        roc_to_crate      = roc_to_crate,
+        accept_mask       = accept_mask,
+        reject_mask       = reject_mask,
+        daq_config_path   = str(args.daq_config) if args.daq_config.is_file() else "",
+        hycal_modules     = hycal_modules,
+        hycal_map_path    = (str(args.hycal_map)
+                             if args.hycal_map.is_file() else None),
+        recon_config_path = (str(args.recon_config)
+                             if args.recon_config.is_file() else None),
     )
     win.show()
     if args.path is not None:
