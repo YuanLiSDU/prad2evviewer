@@ -116,6 +116,7 @@ set(PRAD2DEC_SOURCES
     src/Dsc2Decoder.cpp
     src/EpicsData.cpp
     src/EpicsStore.cpp
+    src/HVDecoder.cpp
     src/WaveAnalyzer.cpp
     src/PulseTemplateStore.cpp
     src/Fadc250FwAnalyzer.cpp

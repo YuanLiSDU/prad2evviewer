@@ -35,6 +35,7 @@
 #include "TdcDecoder.h"
 #include "SyncData.h"
 #include "EpicsStore.h"
+#include "HVDecoder.h"
 
 #include <cstdlib>
 #include <memory>
@@ -1285,6 +1286,324 @@ void bind_epics(py::module_ &m)
         .def("clear", &epics::EpicsStore::Clear);
 }
 
+// -------------------------------------------------------------------------
+// HV archive (hv::HVDecoder, HVSegment)
+// -------------------------------------------------------------------------
+void bind_hv(py::module_ &m)
+{
+    // Lookup descriptor enums.  Bound as nested-style attributes so the
+    // call sites read `dec.HVKind.VMon` / `dec.HVSide.Nearest`.
+    py::enum_<hv::Kind>(m, "HVKind",
+        "Trace selector for HVSegment.value_at / nearest / nearest_next. "
+        "VMon/DV/V0Set apply to HV channels; the four Booster* values to "
+        "booster lanes.")
+        .value("VMon",         hv::Kind::VMon)
+        .value("DV",           hv::Kind::DV)
+        .value("V0Set",        hv::Kind::V0Set)
+        .value("BoosterVMon",  hv::Kind::BoosterVMon)
+        .value("BoosterIMon",  hv::Kind::BoosterIMon)
+        .value("BoosterVSet",  hv::Kind::BoosterVSet)
+        .value("BoosterISet",  hv::Kind::BoosterISet);
+
+    py::enum_<hv::Side>(m, "HVSide",
+        "Side selector for nearest/next lookup.  Nearest = closest in time; "
+        "Next = first snapshot at-or-after the query.")
+        .value("Nearest", hv::Side::Nearest)
+        .value("Next",    hv::Side::Next);
+
+    py::class_<hv::LookupResult>(m, "HVLookupResult",
+        "(channel, unix_time) lookup result. ok=False when out-of-range or NaN.")
+        .def_readonly("ok",       &hv::LookupResult::ok)
+        .def_readonly("t_unix_s", &hv::LookupResult::t_unix_s)
+        .def_readonly("value",    &hv::LookupResult::value)
+        .def("__repr__", [](const hv::LookupResult &r) {
+            char buf[128];
+            if (!r.ok) std::snprintf(buf, sizeof(buf),
+                                     "<HVLookupResult ok=False>");
+            else       std::snprintf(buf, sizeof(buf),
+                                     "<HVLookupResult t=%.3f v=%.3f>",
+                                     r.t_unix_s, r.value);
+            return std::string(buf);
+        });
+
+    py::class_<hv::Interval>(m, "HVInterval",
+        "Closed time interval (unix seconds) returned by find_stable_intervals.")
+        .def_readonly("t_start_unix", &hv::Interval::t_start_unix)
+        .def_readonly("t_end_unix",   &hv::Interval::t_end_unix)
+        .def_property_readonly("duration_s",
+            [](const hv::Interval &iv) { return iv.t_end_unix - iv.t_start_unix; })
+        .def("__repr__", [](const hv::Interval &iv) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "<HVInterval %.3f → %.3f (%.2fs)>",
+                iv.t_start_unix, iv.t_end_unix,
+                iv.t_end_unix - iv.t_start_unix);
+            return std::string(buf);
+        });
+
+    py::class_<hv::ChEvent>(m, "HVChEvent",
+        "One CHTABLE event: an absolute timestamp plus the V0Set vector "
+        "(projected to the segment's kept-channel order).")
+        .def_readonly("abs_ts_ms", &hv::ChEvent::abs_ts_ms)
+        .def_property_readonly("v0sets",
+            [](const hv::ChEvent &e) {
+                py::array_t<float> arr(e.v0sets.size());
+                std::copy(e.v0sets.begin(), e.v0sets.end(), arr.mutable_data());
+                return arr;
+            },
+            "V0Set per channel as a fresh numpy array.");
+
+    py::class_<hv::BstEvent>(m, "HVBstEvent",
+        "One BOOSTER_TABLE event: timestamp + setpoints (VSet / ISet).")
+        .def_readonly("abs_ts_ms", &hv::BstEvent::abs_ts_ms)
+        .def_property_readonly("vsets",
+            [](const hv::BstEvent &e) {
+                py::array_t<float> arr(e.vsets.size());
+                std::copy(e.vsets.begin(), e.vsets.end(), arr.mutable_data());
+                return arr;
+            })
+        .def_property_readonly("isets",
+            [](const hv::BstEvent &e) {
+                py::array_t<float> arr(e.isets.size());
+                std::copy(e.isets.begin(), e.isets.end(), arr.mutable_data());
+                return arr;
+            });
+
+    // ── HVSegment ────────────────────────────────────────────────────────
+    // Bulk arrays go through allocate-then-copy (fresh numpy buffers, no
+    // base pointer).  This is the same pattern ChannelData.samples uses;
+    // exposing a pybind11 view onto the underlying C++ vector silently
+    // corrupts memory once the segment is freed (see the codebase
+    // "py::array_t binding ownership trap" memory).
+    py::class_<hv::HVSegment>(m, "HVSegment",
+        "Time-windowed HV + booster snapshot block.\n\n"
+        "Numeric arrays returned as fresh numpy copies — the underlying "
+        "C++ vectors are not aliased into the numpy buffer.")
+        .def(py::init<>())
+        .def_readonly("interval_ms",       &hv::HVSegment::interval_ms)
+        .def_readonly("window_start_unix", &hv::HVSegment::window_start_unix)
+        .def_readonly("window_end_unix",   &hv::HVSegment::window_end_unix)
+        .def_readonly("source_files",      &hv::HVSegment::source_files)
+        .def_property_readonly("channels",
+            [](const hv::HVSegment &s) { return s.channels; })
+        .def_property_readonly("booster_names",
+            [](const hv::HVSegment &s) { return s.booster_names; })
+        .def_property_readonly("n_channels",          &hv::HVSegment::n_channels)
+        .def_property_readonly("n_snapshots",         &hv::HVSegment::n_snapshots)
+        .def_property_readonly("n_boosters",          &hv::HVSegment::n_boosters)
+        .def_property_readonly("n_booster_snapshots", &hv::HVSegment::n_booster_snapshots)
+        .def_property_readonly("empty",               &hv::HVSegment::empty)
+        .def_property_readonly("t_start_unix",
+            [](const hv::HVSegment &s) -> py::object {
+                if (s.n_snapshots() == 0) return py::none();
+                return py::float_(double(s.timestamps_ms.front()) / 1000.0);
+            })
+        .def_property_readonly("t_end_unix",
+            [](const hv::HVSegment &s) -> py::object {
+                if (s.n_snapshots() == 0) return py::none();
+                return py::float_(double(s.timestamps_ms.back()) / 1000.0);
+            })
+
+        // 1-D numpy arrays
+        .def_property_readonly("timestamps_ms",
+            [](const hv::HVSegment &s) {
+                py::array_t<int64_t> arr(s.timestamps_ms.size());
+                std::copy(s.timestamps_ms.begin(), s.timestamps_ms.end(),
+                          arr.mutable_data());
+                return arr;
+            },
+            "Per-snapshot epoch-ms timestamps (int64).")
+        .def_property_readonly("booster_timestamps_ms",
+            [](const hv::HVSegment &s) {
+                py::array_t<int64_t> arr(s.booster_timestamps_ms.size());
+                std::copy(s.booster_timestamps_ms.begin(),
+                          s.booster_timestamps_ms.end(), arr.mutable_data());
+                return arr;
+            })
+
+        // 2-D numpy arrays — row-major (n_rows, n_cols)
+        .def_property_readonly("dv",
+            [](const hv::HVSegment &s) {
+                py::array_t<float> arr({(py::ssize_t)s.n_snapshots(),
+                                        (py::ssize_t)s.n_channels()});
+                if (!s.dv.empty())
+                    std::copy(s.dv.begin(), s.dv.end(), arr.mutable_data());
+                return arr;
+            },
+            "VMon - V0Set per (snapshot, channel) as a fresh (N_snap × N_ch) "
+            "float32 array.")
+        .def_property_readonly("booster_vmon",
+            [](const hv::HVSegment &s) {
+                py::array_t<float> arr({(py::ssize_t)s.n_booster_snapshots(),
+                                        (py::ssize_t)s.n_boosters()});
+                if (!s.booster_vmon.empty())
+                    std::copy(s.booster_vmon.begin(), s.booster_vmon.end(),
+                              arr.mutable_data());
+                return arr;
+            })
+        .def_property_readonly("booster_imon",
+            [](const hv::HVSegment &s) {
+                py::array_t<float> arr({(py::ssize_t)s.n_booster_snapshots(),
+                                        (py::ssize_t)s.n_boosters()});
+                if (!s.booster_imon.empty())
+                    std::copy(s.booster_imon.begin(), s.booster_imon.end(),
+                              arr.mutable_data());
+                return arr;
+            })
+
+        // Tables (lists of HVChEvent / HVBstEvent — each event already
+        // exposes its arrays as numpy copies)
+        .def_readonly("ch_events",      &hv::HVSegment::ch_events)
+        .def_readonly("booster_events", &hv::HVSegment::booster_events)
+
+        // Index resolution
+        .def("channel_index", &hv::HVSegment::channel_index,
+             py::arg("name"),
+             "Return position of `name` in channels[], or -1 if absent.")
+        .def("booster_index", &hv::HVSegment::booster_index,
+             py::arg("name"),
+             "Return position of `name` in booster_names[], or -1 if absent.")
+
+        // Reconstructed traces
+        .def("v0set_trace",
+            [](const hv::HVSegment &s, int ch_idx) {
+                std::vector<float> v = s.v0set_trace(ch_idx);
+                py::array_t<float> arr(v.size());
+                std::copy(v.begin(), v.end(), arr.mutable_data());
+                return arr;
+            },
+            py::arg("ch_idx"),
+            "V0Set per snapshot for kept channel `ch_idx` (NaN if no "
+            "CHTABLE seen for this channel).")
+        .def("vmon_trace",
+            [](const hv::HVSegment &s, const std::string &name) {
+                int i = s.channel_index(name);
+                if (i < 0)
+                    throw py::key_error("HV channel not found: " + name);
+                std::vector<float> v0 = s.v0set_trace(i);
+                py::array_t<int64_t> ts(s.timestamps_ms.size());
+                py::array_t<float>   vmon(v0.size());
+                std::copy(s.timestamps_ms.begin(), s.timestamps_ms.end(),
+                          ts.mutable_data());
+                const int n_ch = s.n_channels();
+                for (std::size_t k = 0; k < v0.size(); ++k)
+                    vmon.mutable_data()[k] =
+                        s.dv[k * n_ch + i] + v0[k];
+                return py::make_tuple(ts, vmon);
+            },
+            py::arg("name"),
+            "Return (timestamps_ms, vmon) numpy arrays for HV channel `name`. "
+            "VMon is reconstructed via the most-recent CHTABLE V0Set.")
+        .def("dv_trace",
+            [](const hv::HVSegment &s, const std::string &name) {
+                int i = s.channel_index(name);
+                if (i < 0)
+                    throw py::key_error("HV channel not found: " + name);
+                py::array_t<int64_t> ts(s.timestamps_ms.size());
+                py::array_t<float>   dv(s.timestamps_ms.size());
+                std::copy(s.timestamps_ms.begin(), s.timestamps_ms.end(),
+                          ts.mutable_data());
+                const int n_ch = s.n_channels();
+                for (std::size_t k = 0; k < s.timestamps_ms.size(); ++k)
+                    dv.mutable_data()[k] = s.dv[k * n_ch + i];
+                return py::make_tuple(ts, dv);
+            },
+            py::arg("name"),
+            "Return (timestamps_ms, dV) numpy arrays for HV channel `name`.")
+
+        // (channel, unix_time) lookup
+        .def("value_at", &hv::HVSegment::value_at,
+             py::arg("name"), py::arg("unix_time"),
+             py::arg("kind") = hv::Kind::VMon,
+             py::arg("side") = hv::Side::Nearest,
+             "Look up a channel's value at (or near) a wall-clock time.\n"
+             "Returns HVLookupResult — check .ok before reading "
+             ".t_unix_s / .value.")
+        .def("nearest", &hv::HVSegment::nearest,
+             py::arg("name"), py::arg("unix_time"),
+             py::arg("kind") = hv::Kind::VMon,
+             "Snapshot closest in absolute time. HVLookupResult; .ok=False "
+             "when out of range or NaN.")
+        .def("nearest_next", &hv::HVSegment::nearest_next,
+             py::arg("name"), py::arg("unix_time"),
+             py::arg("kind") = hv::Kind::VMon,
+             "First snapshot at-or-after the query time. HVLookupResult; "
+             ".ok=False if the query is past the last snapshot.")
+
+        // Stable-interval finder
+        .def("find_stable_intervals",
+            [](const hv::HVSegment &self,
+               const std::vector<std::string> &channels,
+               double window_s,
+               double std_threshold,
+               py::object dv_threshold,
+               double min_duration_s,
+               double guard_s) {
+                std::optional<double> dvt;
+                if (!dv_threshold.is_none())
+                    dvt = dv_threshold.cast<double>();
+                return self.find_stable_intervals(channels, window_s,
+                                                  std_threshold, dvt,
+                                                  min_duration_s, guard_s);
+            },
+            py::arg("channels"),
+            py::kw_only(),
+            py::arg("window_s") = 5.0,
+            py::arg("std_threshold") = 0.5,
+            py::arg("dv_threshold") = py::none(),
+            py::arg("min_duration_s") = 5.0,
+            py::arg("guard_s") = 1.0,
+            "Find time intervals where ALL named channels are stable.\n\n"
+            "A snapshot is unstable if for ANY of `channels`:\n"
+            "  - rolling-std(dV) over `window_s` > std_threshold, OR\n"
+            "  - dV is NaN, OR\n"
+            "  - |dV| > dv_threshold (only if dv_threshold is not None).\n"
+            "Stable runs shorter than `min_duration_s` are dropped; "
+            "`guard_s` is trimmed from each end.")
+
+        // Persistence
+        .def("save", &hv::HVSegment::save, py::arg("path"),
+             "Write the segment to a compact binary cache (magic VMHV0001).")
+        .def_static("load", &hv::HVSegment::load, py::arg("path"),
+             "Load a cache previously written by save().")
+        .def("__repr__", [](const hv::HVSegment &s) {
+            char buf[256];
+            std::snprintf(buf, sizeof(buf),
+                "<HVSegment n_ch=%d n_snap=%d n_bst=%d n_bsnap=%d "
+                "interval=%dms>",
+                s.n_channels(), s.n_snapshots(),
+                s.n_boosters(), s.n_booster_snapshots(),
+                s.interval_ms);
+            return std::string(buf);
+        });
+
+    // ── HVDecoder ────────────────────────────────────────────────────────
+    py::class_<hv::HVDecoder>(m, "HVDecoder",
+        "Open a directory (or list) of vmon_*.dat files and load windowed "
+        "HVSegment instances.\n\n"
+        "Construction is cheap (filename enumeration only); "
+        "load_window() does the actual I/O.  The mmap-based parser only "
+        "materializes the requested rows × columns, so a few-channel "
+        "few-minute query against a multi-GB daily file stays bounded "
+        "in memory.")
+        .def(py::init<const std::string &>(), py::arg("source"),
+             "Open a directory of vmon_*.dat files (auto-discover) or a "
+             "single .dat path.")
+        .def(py::init<const std::vector<std::string> &>(), py::arg("files"),
+             "Open a curated list of vmon_*.dat paths.")
+        .def_property_readonly("files", &hv::HVDecoder::files,
+             "Discovered file list (sorted).")
+        .def("load_window", &hv::HVDecoder::load_window,
+             py::arg("t_start_unix"), py::arg("t_end_unix"),
+             py::arg("channels") = std::vector<std::string>{},
+             py::arg("cache_path") = std::string(),
+             "Load HV data for [t_start_unix, t_end_unix) seconds.  "
+             "Empty `channels` keeps every channel in the archive.  When "
+             "`cache_path` is given and exists, the cache is returned "
+             "verbatim (channels/window args not re-validated).  Delete "
+             "the cache file to force a refetch.");
+}
+
 } // anonymous namespace
 
 // -------------------------------------------------------------------------
@@ -1303,4 +1622,5 @@ void register_dec(py::module_ &m)
     bind_tdc(dec);
     bind_epics(dec);
     bind_channel(dec);
+    bind_hv(dec);
 }
