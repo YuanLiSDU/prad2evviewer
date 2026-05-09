@@ -7,7 +7,7 @@
     "apv_channels": 128,
     "readout_center": 32,
     "common_mode_threshold": 20.0,
-    "zero_suppression_threshold": 7.0,
+    "zero_suppression_threshold": 5.0,
     "cross_talk_threshold": 8.0,
     "reject_first_timebin": true,
     "reject_last_timebin": true,
