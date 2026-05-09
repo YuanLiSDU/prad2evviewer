@@ -351,29 +351,61 @@ async function _summaryLms(){
         const trigMask=`accept=0x${(tf.trigger_accept||0).toString(16)} reject=0x${(tf.trigger_reject||0).toString(16)}`;
         return `LMS events received: ${d?d.events||0:0} (trigger mask = ${trigMask})\n\n`;
     }
-    const allEntries=Object.entries(d.modules).map(([idx,m])=>({idx:parseInt(idx),...m}));
+    const stateOf=m => m.state || (m.warn ? 'warn' : 'ok');
+    const allEntries=Object.entries(d.modules).map(([idx,m])=>({idx:parseInt(idx),...m,_st:stateOf(m)}));
+    // Sort: drift first (worst |drift-1| at top) → warn (worst RMS/Mean)
+    // → ok.  Drift entries are top-priority errors and need to lead the
+    // report so reviewers see them before scrolling.
+    const stateRank=st=>(st==='drift'?0:st==='warn'?1:2);
     allEntries.sort((a,b)=>{
-        if(a.warn!==b.warn) return a.warn?-1:1;
-        const ra=a.mean>0?a.rms/a.mean:0, rb=b.mean>0?b.rms/b.mean:0;
-        return rb-ra;
+        const ra=stateRank(a._st), rb=stateRank(b._st);
+        if(ra!==rb) return ra-rb;
+        if(a._st==='drift'){
+            const da=a.drift!=null?Math.abs(a.drift-1):0;
+            const db=b.drift!=null?Math.abs(b.drift-1):0;
+            return db-da;
+        }
+        const ramf=a.mean>0?a.rms/a.mean:0, rbmf=b.mean>0?b.rms/b.mean:0;
+        return rbmf-ramf;
     });
-    const warnEntries=allEntries.filter(e=>e.warn);
-    const okEntries=allEntries.filter(e=>!e.warn);
-    const tableEntries=[...warnEntries, ...okEntries.slice(0,5)];
+    const driftEntries=allEntries.filter(e=>e._st==='drift');
+    const warnEntries =allEntries.filter(e=>e._st==='warn');
+    const okEntries   =allEntries.filter(e=>e._st==='ok');
+    // Always include every drift+warn row, plus top 5 OK rows for context.
+    const tableEntries=[...driftEntries, ...warnEntries, ...okEntries.slice(0,5)];
 
     let s=`LMS events: ${d.events||0} | Modules: ${allEntries.length} (ref: LMS3)\n\n`;
-    s+=`Warnings: **${warnEntries.length}** / ${allEntries.length} modules\n\n`;
+    // Per-type ranges + suppress list — show in the header so the reviewer
+    // knows what counted as a flag.
+    const fmtBand=(lo,hi)=> (lo!=null&&hi!=null)?`[${lo.toFixed(2)}, ${hi.toFixed(2)}]`:'?';
+    const wBand=fmtBand(d.drift_low_w, d.drift_high_w);
+    const gBand=fmtBand(d.drift_low_g, d.drift_high_g);
+    const suppressed=(d.drift_suppress_types||[]);
+    const suppressTxt=suppressed.length?` | suppressed: ${suppressed.join(', ')}`:'';
+    if(driftEntries.length){
+        s+=`**GAIN DRIFT**: ${driftEntries.length} module(s) outside `+
+           `W ${wBand}, G ${gBand}${suppressTxt}`;
+        if(d.drift_lamp_scale!=null) s+=` (lamp scale via ${d.drift_lamp_ref||'?'} = ${d.drift_lamp_scale.toFixed(3)})`;
+        s+=`\n\n`;
+    } else if(d.drift_enabled){
+        s+=`Gain drift: 0 modules out of band — W ${wBand}, G ${gBand}${suppressTxt}`;
+        if(d.drift_lamp_ref) s+=`, lamp ref ${d.drift_lamp_ref}`;
+        s+=`\n\n`;
+    }
+    s+=`Warnings (stability): **${warnEntries.length}** / ${allEntries.length} modules\n\n`;
     if(tableEntries.length){
+        const fmtState=st=>st==='drift'?'**DRIFT**':st==='warn'?'**WARN**':'OK';
         s+=mdTable(
-            ['Module','Mean','RMS','RMS/Mean %','Count','Status'],
+            ['Module','Mean','RMS','RMS/Mean %','Drift','Count','Status'],
             tableEntries.map(e=>[
                 e.name, e.mean.toFixed(1), e.rms.toFixed(2),
                 (e.mean>0?(e.rms/e.mean*100).toFixed(1):'--')+'%',
-                e.count, e.warn?'**WARN**':'OK'
-            ]),['l','r','r','r','r','l']
+                (e.drift!=null?e.drift.toFixed(2):'--'),
+                e.count, fmtState(e._st)
+            ]),['l','r','r','r','r','r','l']
         );
         if(okEntries.length>5)
-            s+=`*Showing ${warnEntries.length} warnings + top 5 of ${okEntries.length} OK modules by RMS/Mean*\n\n`;
+            s+=`*Showing ${driftEntries.length} drift + ${warnEntries.length} warn + top 5 of ${okEntries.length} OK modules*\n\n`;
     }
     return s;
 }

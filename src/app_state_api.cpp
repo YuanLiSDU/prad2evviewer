@@ -296,6 +296,45 @@ json AppState::apiLmsSummary(int ref_index) const
     auto rc = buildRefCorrection(latest_lms_integral, latest_alpha_integral,
                                   lms_ref_channels, ref_index);
 
+    // ---- Gain-drift lamp scale --------------------------------------------
+    // lamp_scale = current_LMS_mean[ref] / baseline_LMS_peak[ref], using the
+    // ref channel named in lms_drift_ref_channel (falls back to the first
+    // ref channel that has both a current history and a baseline entry).
+    // This cancels the LMS pulser / FADC scale change between baseline and
+    // current run so the drift ratio reflects PMT gain only.  Computed once
+    // per request and shared across modules.
+    bool drift_enabled = driftEnabled();
+    double lamp_scale = 0.;
+    std::string lamp_ref_used;
+    auto compute_curr_ref_mean = [&](int mod_idx) -> double {
+        auto it = lms_history.find(mod_idx);
+        if (it == lms_history.end() || it->second.empty()) return 0.;
+        double s = 0; int n = 0;
+        for (auto &e : it->second) { s += e.integral; ++n; }
+        return n > 0 ? s / n : 0.;
+    };
+    if (drift_enabled) {
+        // Try the configured ref channel first (e.g. "LMS2"), then fall
+        // back to whichever lms_ref_channels entry has a usable pair.
+        auto try_ref = [&](const std::string &name) {
+            if (lamp_scale > 0) return;
+            auto bit = lms_baseline_ref_peak.find(name);
+            if (bit == lms_baseline_ref_peak.end() || bit->second <= 0) return;
+            for (auto &rc : lms_ref_channels) {
+                if (rc.name != name || rc.module_index < 0) continue;
+                double curr = compute_curr_ref_mean(rc.module_index);
+                if (curr > 0) {
+                    lamp_scale = curr / bit->second;
+                    lamp_ref_used = name;
+                }
+                break;
+            }
+        };
+        if (!lms_drift_ref_channel.empty()) try_ref(lms_drift_ref_channel);
+        if (lamp_scale <= 0)
+            for (auto &rc : lms_ref_channels) try_ref(rc.name);
+    }
+
     json mods = json::object();
     for (auto &[idx, hist] : lms_history) {
         if (hist.empty()) continue;
@@ -310,14 +349,83 @@ json AppState::apiLmsSummary(int ref_index) const
         double mean = sum / count;
         double var = sum2 / count - mean * mean;
         double rms = var > 0 ? std::sqrt(var) : 0;
+
         bool warn = (mean > 0 && rms / mean > lms_warn_thresh) ||
                     (mean < lms_warn_min_mean);
+
+        // ---- drift-from-baseline (gain monitor) ----
+        // drift = current mean / (baseline_lms_peak * lamp_scale)
+        // Use the UNCORRECTED current mean (independent of the ref-correction
+        // toggle) so the drift state never changes when the user flips the
+        // LMS-tab Ref dropdown for visual normalization.
+        double raw_sum = 0;
+        for (auto &e : hist) raw_sum += e.integral;
+        double raw_mean = raw_sum / count;
+        double drift_val = std::nan("");
+        bool   drift_flag = false;
+        bool   drift_suppressed = false;
+        if (drift_enabled && lamp_scale > 0
+            && idx >= 0 && idx < hycal.module_count())
+        {
+            auto &mod = hycal.module(idx);
+            auto bit = lms_baseline_peak.find(mod.name);
+            // Skip channels whose baseline LMS peak is implausibly low —
+            // gain_fitter occasionally returns a noise-floor fit (~few ADC)
+            // for dead/saturated modules, which would inflate raw_mean/expected
+            // into a phantom huge drift.  30 ADC is well below any healthy
+            // LMS peak (typically 200+) but above noise.
+            if (bit != lms_baseline_peak.end() && bit->second > 30.f) {
+                double expected = bit->second * lamp_scale;
+                // Same alive-channel gate on the post-scale expected value:
+                // if lamp_scale collapsed the baseline below the warn floor,
+                // the channel is effectively dead this run and would warn
+                // anyway — don't double-flag it.
+                if (expected > lms_warn_min_mean) {
+                    drift_val = raw_mean / expected;
+                    // Pick threshold pair by module type.  W/G have different
+                    // healthy widths so they get separate bounds; everything
+                    // else (V, LMS refs themselves, etc.) uses the W bounds
+                    // as a sensible default.
+                    bool is_glass = mod.is_glass();
+                    float lo = is_glass ? lms_drift_low_g  : lms_drift_low_w;
+                    float hi = is_glass ? lms_drift_high_g : lms_drift_high_w;
+                    if (drift_val < lo || drift_val > hi)
+                        drift_flag = true;
+                    // Suppress the WARN (not the value) for whole module
+                    // types listed in lms_drift_suppress_types.  Operators
+                    // can still see the drift number in the table column;
+                    // it just doesn't escalate state to "drift" or move
+                    // the row to the top.
+                    if (drift_flag &&
+                        lms_drift_suppress_types.count(static_cast<int>(mod.type)))
+                    {
+                        drift_flag = false;
+                        drift_suppressed = true;
+                    }
+                }
+            }
+        }
+
+        // Tri-state, top-priority first: drift > warn > ok.  The single
+        // 'state' string is what the GUI / report sort and color on; the
+        // legacy 'warn' bool stays true for warn OR drift so any older UI
+        // stops on a problem.
+        const char *state = drift_flag ? "drift"
+                          : (warn ? "warn" : "ok");
+
         if (idx >= 0 && idx < hycal.module_count()) {
             auto &mod = hycal.module(idx);
-            mods[std::to_string(idx)] = {
+            json entry = {
                 {"name", mod.name}, {"mean", std::round(mean * 10) / 10},
-                {"rms", std::round(rms * 100) / 100},
-                {"count", count}, {"warn", warn}};
+                {"rms",  std::round(rms  * 100) / 100},
+                {"count", count}, {"warn", warn || drift_flag},
+                {"state", state}};
+            if (!std::isnan(drift_val))
+                entry["drift"] = std::round(drift_val * 1000) / 1000;
+            else
+                entry["drift"] = nullptr;
+            if (drift_suppressed) entry["drift_suppressed"] = true;
+            mods[std::to_string(idx)] = std::move(entry);
         }
     }
     return {{"modules", mods}, {"events", lms_events.load()},
@@ -326,6 +434,14 @@ json AppState::apiLmsSummary(int ref_index) const
             {"ref_factor", rc.factor},
             {"ref_lms", rc.lms},
             {"ref_alpha", rc.alpha},
+            {"drift_enabled", drift_enabled},
+            {"drift_lamp_scale", lamp_scale > 0 ? json(lamp_scale) : json(nullptr)},
+            {"drift_lamp_ref",   lamp_ref_used},
+            {"drift_low_w",      lms_drift_low_w},
+            {"drift_high_w",     lms_drift_high_w},
+            {"drift_low_g",      lms_drift_low_g},
+            {"drift_high_g",     lms_drift_high_g},
+            {"drift_suppress_types", lms_drift_suppress_type_names},
             {"sync_unix", sync_unix}, {"sync_rel_sec", sync_rel_sec}};
 }
 
@@ -565,6 +681,14 @@ void AppState::fillConfigJson(json &cfg) const
         {"trigger", lms_trigger.toJson()},
         {"warn_threshold", lms_warn_thresh},
         {"events", lms_events.load()}, {"ref_channels", apiLmsRefChannels()},
+        {"drift_enabled",  driftEnabled()},
+        {"drift_baseline", lms_drift_baseline_file},
+        {"drift_ref",      lms_drift_ref_channel},
+        {"drift_low_w",    lms_drift_low_w},
+        {"drift_high_w",   lms_drift_high_w},
+        {"drift_low_g",    lms_drift_low_g},
+        {"drift_high_g",   lms_drift_high_g},
+        {"drift_suppress_types", lms_drift_suppress_type_names},
     };
     auto metric_cfg = [](const ShellMetric &m) {
         nlohmann::json j = {

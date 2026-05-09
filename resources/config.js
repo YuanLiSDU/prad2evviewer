@@ -165,6 +165,35 @@ function applyConfig(data){
                 sel.appendChild(o);
             }
         }
+        // Drift baseline indicator pill — short label shows the run number
+        // (extracted from the .dat filename, e.g. "prad_024352_LMS.dat" →
+        // "Baseline: run 24352").  Tooltip carries the full path + per-type
+        // bands + suppress list so operators can audit what's being applied
+        // without leaving the LMS tab.
+        const pill=document.getElementById('lms-baseline-pill');
+        if(pill){
+            if(data.lms.drift_enabled){
+                const path=data.lms.drift_baseline||'';
+                const base=path.split('/').pop()||path;
+                const m=base.match(/_0*(\d+)_/);
+                const label=m?`run ${m[1]}`:base;
+                pill.style.display='inline-block';
+                pill.textContent=`Baseline: ${label}`;
+                const fmt=(lo,hi)=>(lo!=null&&hi!=null)?`[${(+lo).toFixed(2)}, ${(+hi).toFixed(2)}]`:'?';
+                const sup=(data.lms.drift_suppress_types||[]).join(', ')||'(none)';
+                pill.title =
+                    `Drift detection baseline\n`+
+                    `File:        ${path}\n`+
+                    `Ref channel: ${data.lms.drift_ref||'(default)'}\n`+
+                    `W band:      ${fmt(data.lms.drift_low_w, data.lms.drift_high_w)}\n`+
+                    `G band:      ${fmt(data.lms.drift_low_g, data.lms.drift_high_g)}\n`+
+                    `Suppressed:  ${sup}`;
+            } else {
+                pill.style.display='none';
+                pill.textContent='Baseline: —';
+                pill.title='Drift detection disabled (no baseline configured)';
+            }
+        }
     }
     if(data.color_ranges){
         for(const [k,v] of Object.entries(data.color_ranges)){

@@ -284,8 +284,11 @@
                 <option value="rms_frac" selected>RMS/Mean</option>
                 <option value="mean">Mean</option>
                 <option value="rms">RMS</option>
-                <option value="warn">Warning</option>
+                <option value="drift">Drift</option>
+                <option value="warn">Status</option>
             </select>
+            <span class="lms-baseline-pill" id="lms-baseline-pill" style="display:none"
+                  title="Drift detection baseline">Baseline: —</span>
             <label>Log</label>
             <input type="checkbox" id="lms-log-scale">
             <div class="color-bar">
@@ -451,7 +454,7 @@
             <table class="peaks-table" id="lms-table">
                 <thead><tr>
                     <th>Module</th><th>Mean</th><th>RMS</th>
-                    <th>RMS/Mean</th><th>Count</th><th>Status</th>
+                    <th>RMS/Mean</th><th>Drift</th><th>Count</th><th>Status</th>
                 </tr></thead>
                 <tbody id="lms-tbody"></tbody>
             </table>

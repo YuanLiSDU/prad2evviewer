@@ -9,8 +9,54 @@
 #include <iostream>
 #include <cmath>
 #include <cstdlib>
+#include <sstream>
 
 using json = nlohmann::json;
+
+namespace {
+
+// Parse a prad_NNNNNN_LMS.dat file (produced by prad2ana_gain_monitor /
+// gain_fitter).  Format (7 whitespace-separated cols, no header):
+//   LMS reference rows (LMS1/2/3):
+//       name alpha_peak alpha_sigma alpha_chi2 lms_peak lms_sigma lms_chi2
+//       → store vals[3] (lms_peak) under the channel name.
+//   HyCal module rows (W*/G*):
+//       name lms_peak lms_sigma lms_chi2 gain_factor1 gain_factor2 gain_factor3
+//       → store vals[0] (lms_peak) under the module name.
+// Rows are classified by name prefix (not line number) so blank lines or
+// reordering can't misclassify a row.  Returns true if any row parsed.
+static bool parse_lms_dat(const std::string &path,
+                          std::unordered_map<std::string, float> &mod_peak,
+                          std::unordered_map<std::string, float> &ref_peak)
+{
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+
+    mod_peak.clear();
+    ref_peak.clear();
+    std::string line;
+    while (std::getline(f, line)) {
+        // strip commas so we accept both space- and comma-separated rows
+        for (auto &c : line) if (c == ',') c = ' ';
+        std::istringstream iss(line);
+        std::string name;
+        if (!(iss >> name)) continue;
+        std::vector<float> vals;
+        float v;
+        while (iss >> v) vals.push_back(v);
+        if (vals.size() < 6) continue;
+
+        if (name.rfind("LMS", 0) == 0)
+            ref_peak[name] = vals[3];
+        else if (fdec::HyCalSystem::name_to_id(name) >= 0)
+            mod_peak[name] = vals[0];
+        // unknown prefix: silently skip (keeps the parser tolerant of
+        // future header lines / extra channels)
+    }
+    return !mod_peak.empty() || !ref_peak.empty();
+}
+
+} // namespace
 
 //=============================================================================
 // Initialization
@@ -320,11 +366,93 @@ void AppState::init(const std::string &db_dir,
         }
         if (lm.contains("alpha"))
             alpha_trigger.parse(lm["alpha"], trigger_bits_def);
+
+        // Gain-drift baseline (optional). When configured, apiLmsSummary
+        // computes drift = current_LMS / (baseline_LMS * lamp_scale) per
+        // module and flags drift outside [drift_low, drift_high] as a
+        // top-priority error (above the existing rms/floor warn).
+        if (lm.contains("drift_baseline_file")) {
+            std::string p = lm["drift_baseline_file"].get<std::string>();
+            if (!p.empty() && p[0] != '/') p = db_dir + "/" + p;
+            lms_drift_baseline_file = p;
+        }
+        if (lm.contains("drift_ref_channel"))
+            lms_drift_ref_channel = lm["drift_ref_channel"].get<std::string>();
+        // Common-knob fallback: 'drift_warn_low/high' applies to both W and G
+        // unless overridden by the per-type keys below.
+        if (lm.contains("drift_warn_low")) {
+            float v = lm["drift_warn_low"];
+            lms_drift_low_w = v; lms_drift_low_g = v;
+        }
+        if (lm.contains("drift_warn_high")) {
+            float v = lm["drift_warn_high"];
+            lms_drift_high_w = v; lms_drift_high_g = v;
+        }
+        // Per-module-type overrides (recommended).  Use these to handle the
+        // different healthy widths of PbWO4 vs PbGlass.
+        if (lm.contains("drift_warn_low_w"))  lms_drift_low_w  = lm["drift_warn_low_w"];
+        if (lm.contains("drift_warn_high_w")) lms_drift_high_w = lm["drift_warn_high_w"];
+        if (lm.contains("drift_warn_low_g"))  lms_drift_low_g  = lm["drift_warn_low_g"];
+        if (lm.contains("drift_warn_high_g")) lms_drift_high_g = lm["drift_warn_high_g"];
+
+        // Suppress drift WARNINGS (not the drift value itself) for these
+        // module types — names follow hycal_map.json's "t" field.  Useful when
+        // a known systematic between baseline calibrations would otherwise
+        // flood the alarm list.  Unknown type names are ignored with a warning.
+        if (lm.contains("drift_warn_suppress_types")
+            && lm["drift_warn_suppress_types"].is_array())
+        {
+            for (auto &el : lm["drift_warn_suppress_types"]) {
+                if (!el.is_string()) continue;
+                std::string tname = el.get<std::string>();
+                fdec::ModuleType t = fdec::HyCalSystem::parse_type(tname);
+                if (t == fdec::ModuleType::Unknown) {
+                    std::cerr << "[WARN] LMS drift_warn_suppress_types: unknown type '"
+                              << tname << "' — accepted: PbGlass, PbWO4, LMS, Veto\n";
+                    continue;
+                }
+                lms_drift_suppress_types.insert(static_cast<int>(t));
+                lms_drift_suppress_type_names.push_back(tname);
+            }
+        }
+
+        bool drift_loaded = false;
+        if (!lms_drift_baseline_file.empty()) {
+            drift_loaded = parse_lms_dat(lms_drift_baseline_file,
+                                         lms_baseline_peak,
+                                         lms_baseline_ref_peak);
+            if (!drift_loaded)
+                std::cerr << "[WARN] LMS drift baseline could not be loaded: "
+                          << lms_drift_baseline_file << "\n";
+            else if (lms_baseline_peak.empty() || lms_baseline_ref_peak.empty())
+                std::cerr << "[WARN] LMS drift baseline missing "
+                          << (lms_baseline_peak.empty() ? "module" : "reference")
+                          << " rows — drift detection will be disabled. File: "
+                          << lms_drift_baseline_file << "\n";
+        }
+
         std::cerr << "LMS       : " << lms_trigger
                   << " time_cut=[" << lms_time_min << "," << lms_time_max << "]"
                   << " warn=" << lms_warn_thresh
                   << " refs=" << lms_ref_channels.size()
-                  << " alpha=" << alpha_trigger << "\n";
+                  << " alpha=" << alpha_trigger;
+        if (drift_loaded) {
+            std::cerr << " drift_baseline=" << lms_drift_baseline_file
+                      << " (" << lms_baseline_peak.size() << " mods, "
+                      << lms_baseline_ref_peak.size() << " refs)"
+                      << " drift_W=[" << lms_drift_low_w << "," << lms_drift_high_w << "]"
+                      << " drift_G=[" << lms_drift_low_g << "," << lms_drift_high_g << "]"
+                      << " ref_ch='" << lms_drift_ref_channel << "'";
+            if (!lms_drift_suppress_type_names.empty()) {
+                std::cerr << " suppress=[";
+                for (size_t i = 0; i < lms_drift_suppress_type_names.size(); ++i) {
+                    if (i) std::cerr << ",";
+                    std::cerr << lms_drift_suppress_type_names[i];
+                }
+                std::cerr << "]";
+            }
+        }
+        std::cerr << "\n";
     }
 
     // monitor_status: nested {livetime, beam: {energy, current}} — header

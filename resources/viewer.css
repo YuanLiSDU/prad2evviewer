@@ -320,8 +320,23 @@ body { font-family:'Consolas','SF Mono',monospace; background:var(--bg); color:v
     flex:0 0 24px; padding:4px 10px; font-size:12px;
     border-top:1px solid var(--border); background:var(--panel);
 }
-.lms-warn { color:var(--theme-danger); font-weight:600; }
-.lms-ok { color:var(--theme-success); }
+/* Pill in the LMS toolbar showing which baseline file the drift detection is
+   comparing against.  Hidden when no baseline is configured. */
+.lms-baseline-pill {
+    margin-left:8px; padding:1px 7px; font-size:11px; line-height:14px;
+    border:1px solid var(--border); border-radius:8px;
+    background:var(--panel); color:var(--dim); white-space:nowrap;
+    cursor:default;
+}
+.lms-baseline-pill.has-drift { color:var(--theme-danger); border-color:var(--theme-danger); }
+.lms-warn  { color:var(--theme-warn, var(--theme-danger)); font-weight:600; }
+.lms-drift { color:var(--theme-danger); font-weight:700; text-transform:uppercase;
+             letter-spacing:0.04em; }
+.lms-ok    { color:var(--theme-success); }
+/* Drift rows are tinted so they're obvious before reading the Status column. */
+.cl-table-row.drift-row { background:rgba(220,38,38,0.12); }
+.cl-table-row.drift-row:hover { background:rgba(220,38,38,0.20); cursor:pointer; }
+.cl-table-row.drift-row.selected { background:rgba(220,38,38,0.28); }
 #cl-detail-header .mod-name { color:var(--accent); font-weight:600; }
 #cl-detail-header .mod-daq { color:var(--dim); font-size:11px; }
 .detail-header .mod-name { color:var(--accent); font-weight:600; }

@@ -10,17 +10,37 @@ let lmsSelectedModule=-1;
 // /overlay into trace lines and the legend bg at draw time).
 let _lmsHistRaw=null, _lmsHistModName=null;
 
+// Tri-state from the API: 'drift' (top-priority error from gain-drift
+// detection) > 'warn' (rms/floor stability check) > 'ok'.  Older API
+// responses may only have md.warn — fall back to it so the GUI keeps
+// working against an old server.
+function lmsState(md){
+    if(!md) return 'ok';
+    if(md.state) return md.state;
+    return md.warn ? 'warn' : 'ok';
+}
+
+const LMS_DRIFT_SUFFIX_RE = /\s*\(\d+ drift\)$/;
+function setPillText(pill, text){
+    if(pill.textContent !== text) pill.textContent = text;
+}
+
 function geoLms(){
     const metric=document.getElementById('lms-color-metric').value;
     const useLog=document.getElementById('lms-log-scale').checked;
     const mods=lmsSummaryData?lmsSummaryData.modules:{};
 
+    // For 'drift' metric: paint distance from 1.0 so both gain loss (drift<1)
+    // and gain growth (drift>1) light up.  Modules with no baseline contribute
+    // 0 (= empty colour for that module type).
     const lmsVal=md=>{
         if(!md) return null;
         if(metric==='mean')     return md.mean;
         if(metric==='rms')      return md.rms;
         if(metric==='rms_frac') return md.mean>0?md.rms/md.mean:0;
-        return md.warn?1:0;   // 'warn'
+        if(metric==='drift')    return (md.drift!=null) ? Math.abs(md.drift-1) : 0;
+        // 'warn' is the catch-all status colorizer.
+        return lmsState(md)==='ok' ? 0 : 1;
     };
 
     let autoMax=0;
@@ -29,16 +49,23 @@ function geoLms(){
     const lmsr=getGeoRange('lms',metric);
     const vmin=lmsr[0]!==null?lmsr[0]:0;
     const vmax=lmsr[1]!==null?lmsr[1]:autoMax;
-    const dp=metric==='rms_frac'?3:metric==='rms'?2:0;
+    const dp=(metric==='rms_frac'||metric==='drift')?3:metric==='rms'?2:0;
     document.getElementById('lms-range-min-show').textContent=vmin.toFixed(dp);
     document.getElementById('lms-range-max-show').textContent=vmax.toFixed(dp);
 
     renderGeo(
         i => {
             const md=mods[String(i)];
+            // Status metric: drift = red, warn = orange, ok = green
+            if(metric==='warn'){
+                const st=lmsState(md);
+                if(st==='drift') return THEME.danger;
+                if(st==='warn')  return THEME.warn || THEME.danger;
+                if(md && md.count>0) return THEME.success;
+                return geoEmptyColor(modules[i].t);
+            }
             const val=lmsVal(md);
             if(val!==null&&val>0){
-                if(metric==='warn') return md.warn?THEME.danger:THEME.success;
                 return geoValueColor(val,vmin,vmax,useLog);
             }
             return geoEmptyColor(modules[i].t);
@@ -46,7 +73,9 @@ function geoLms(){
         i => {
             if(lmsSelectedModule===i) return {color:THEME.selectBorder,width:2.5};
             const md=mods[String(i)];
-            if(md&&md.warn) return {color:THEME.danger,width:1.5};
+            const st=lmsState(md);
+            if(st==='drift') return {color:THEME.danger,width:2};
+            if(st==='warn')  return {color:THEME.warn||THEME.danger,width:1.5};
             return null;
         },
         null
@@ -60,16 +89,44 @@ function fetchLmsSummary(){
         geoLms();
         updateLmsTable();
         if(hoveredModule) updateGeoTooltip();
-        // update tab dot if not currently on LMS tab
-        if(activeTab!=='lms') updateLmsDot();
+        // Always refresh dot+pill state.  The dot itself is suppressed when
+        // on the LMS tab (see below) — but the pill lives in the LMS toolbar
+        // and would otherwise freeze with stale drift-count text.
+        updateLmsDot();
     }).catch(()=>{});
 }
 
 function updateLmsDot(){
     const dot=document.getElementById('lms-dot');
-    if(!lmsSummaryData||!lmsSummaryData.modules){dot.className='tab-dot';return;}
-    const hasWarn=Object.values(lmsSummaryData.modules).some(m=>m.warn);
-    dot.className='tab-dot'+(hasWarn?' alert':'');
+    const pill=document.getElementById('lms-baseline-pill');
+    if(!lmsSummaryData||!lmsSummaryData.modules){
+        if(activeTab!=='lms') dot.className='tab-dot';
+        if(pill){
+            pill.classList.remove('has-drift');
+            setPillText(pill, pill.textContent.replace(LMS_DRIFT_SUFFIX_RE,''));
+        }
+        return;
+    }
+    // Drift = top-priority error → solid red ('alert').  Warn-only =
+    // orange dot ('warn').  All-ok = no dot.
+    let hasDrift=false, hasWarn=false, driftCount=0;
+    for(const m of Object.values(lmsSummaryData.modules)){
+        const st=lmsState(m);
+        if(st==='drift'){ hasDrift=true; driftCount++; }
+        else if(st==='warn') hasWarn=true;
+    }
+    // Dot is for the *inactive* tab — switchTab clears it on entry, and
+    // re-asserting alert/warn while the user is looking at the data would
+    // be visual noise.
+    if(activeTab!=='lms')
+        dot.className='tab-dot'+(hasDrift?' alert':hasWarn?' warn':'');
+    // Pill flashes red when drift is outstanding and gets the count appended,
+    // so operators see "problem + which baseline" in one glance.
+    if(pill && pill.style.display!=='none'){
+        pill.classList.toggle('has-drift', hasDrift);
+        const base=pill.textContent.replace(LMS_DRIFT_SUFFIX_RE,'');
+        setPillText(pill, hasDrift ? `${base} (${driftCount} drift)` : base);
+    }
 }
 
 function fetchLmsHistory(modIdx, modName){
@@ -127,27 +184,55 @@ function renderLmsHistory(){
 function updateLmsTable(){
     const tbody=document.getElementById('lms-tbody');
     if(!lmsSummaryData||!lmsSummaryData.modules){
-        tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--dim);padding:8px">No LMS data</td></tr>';
+        tbody.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--dim);padding:8px">No LMS data</td></tr>';
         return;
     }
-    // sort: warnings first, then by rms/mean descending
+    // Sort: drift first (largest |drift-1| at top), then warn (largest
+    // RMS/Mean), then OK.  This puts the most-broken channels on top so
+    // the operator sees them without scrolling.
     const entries=Object.entries(lmsSummaryData.modules).map(([idx,m])=>({idx:parseInt(idx),...m}));
+    const stateRank=st=>(st==='drift'?0:st==='warn'?1:2);
     entries.sort((a,b)=>{
-        if(a.warn!==b.warn) return a.warn?-1:1;
-        const ra=a.mean>0?a.rms/a.mean:0, rb=b.mean>0?b.rms/b.mean:0;
-        return rb-ra;
+        const ra=stateRank(lmsState(a)), rb=stateRank(lmsState(b));
+        if(ra!==rb) return ra-rb;
+        if(lmsState(a)==='drift'){
+            // Worst drift first within the drift group.
+            const da=a.drift!=null?Math.abs(a.drift-1):0;
+            const db=b.drift!=null?Math.abs(b.drift-1):0;
+            return db-da;
+        }
+        const ramf=a.mean>0?a.rms/a.mean:0, rbmf=b.mean>0?b.rms/b.mean:0;
+        return rbmf-ramf;
     });
     let rows='';
     for(const e of entries){
         const rmsFrac=e.mean>0?(e.rms/e.mean*100).toFixed(1):'--';
         const sel=lmsSelectedModule===e.idx;
-        rows+=`<tr class="cl-table-row${sel?' selected':''}" data-idx="${e.idx}">
+        const st=lmsState(e);
+        // Drift cell: show value, mark with a (·) hint when suppressed so the
+        // operator knows the module is out of band but the warn was muted on
+        // purpose.  No row tint — suppressed rows stay 'ok' in sort order.
+        let driftCell;
+        if(e.drift==null){
+            driftCell='--';
+        } else if(e.drift_suppressed){
+            driftCell=`<span title="warning suppressed by type" style="color:var(--dim)">${e.drift.toFixed(2)}·</span>`;
+        } else {
+            driftCell=e.drift.toFixed(2);
+        }
+        let statusHtml;
+        if(st==='drift')      statusHtml='<span class="lms-drift">DRIFT</span>';
+        else if(st==='warn')  statusHtml='<span class="lms-warn">WARN</span>';
+        else                  statusHtml='<span class="lms-ok">OK</span>';
+        const rowCls='cl-table-row'+(sel?' selected':'')+(st==='drift'?' drift-row':'');
+        rows+=`<tr class="${rowCls}" data-idx="${e.idx}">
             <td>${e.name}</td>
             <td>${e.mean.toFixed(1)}</td>
             <td>${e.rms.toFixed(2)}</td>
             <td>${rmsFrac}%</td>
+            <td style="text-align:center">${driftCell}</td>
             <td style="text-align:center">${e.count}</td>
-            <td style="text-align:center">${e.warn?'<span class="lms-warn">WARN</span>':'<span class="lms-ok">OK</span>'}</td>
+            <td style="text-align:center">${statusHtml}</td>
         </tr>`;
     }
     tbody.innerHTML=rows;

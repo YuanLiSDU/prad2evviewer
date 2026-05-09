@@ -28,6 +28,7 @@ struct ReconEventData;
 #include <array>
 #include <map>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -223,6 +224,48 @@ struct AppState {
     float    lms_warn_thresh  = 0.1f;
     float    lms_warn_min_mean = 100.f;  // warn if mean below this
     int      lms_max_history  = 5000;
+
+    // Gain-drift detection: compare current LMS mean against a baseline LMS dat
+    // file (produced by prad2ana_gain_monitor for a known-good calibration run).
+    // Drift is reference-normalized so a global lamp-output / FADC-integration
+    // change between baseline and current run does not register as drift.
+    //
+    // For each module M with a baseline:
+    //   lamp_scale = current_LMS_mean[ref] / baseline_LMS_peak[ref]   (using
+    //                lms_drift_ref_channel; falls back to first reference)
+    //   expected   = baseline_LMS_peak[M] * lamp_scale
+    //   drift      = current_LMS_mean[M] / expected
+    //
+    // A module is flagged "drift" when drift < lms_drift_low or > lms_drift_high.
+    // Drift is treated as a top-priority error in the LMS table / report / tab dot
+    // (ranks above the existing stability/floor warn).
+    std::string lms_drift_baseline_file;        // path resolved at init (empty = disabled)
+    std::string lms_drift_ref_channel;          // ref-channel name (e.g. "LMS2"); empty = first ref
+    // Per-module-type drift thresholds.  PbWO4 (W) and PbGlass (G) have very
+    // different LMS-coupling and PMT aging behaviours; in the 024352→024459
+    // baseline span, healthy W modules sat within ±5% of 1.0 while the entire
+    // PbGlass population shifted up by ~21%.  A single threshold either misses
+    // genuine W drift or floods the alarm list with the G systematic, so each
+    // type gets its own [low, high] pair.  Defaults are tight on W (where
+    // healthy width is ~5%, so ±15% is ~3σ from the bulk) and looser on G to
+    // accommodate the systematic — re-tune in monitor_config.json once a fresh
+    // baseline lands and the G shift is folded into the reference.
+    float       lms_drift_low_w  = 0.85f;       // PbWO4: flag drift below this
+    float       lms_drift_high_w = 1.15f;       // PbWO4: flag drift above this
+    float       lms_drift_low_g  = 0.7f;        // PbGlass: flag drift below this
+    float       lms_drift_high_g = 1.5f;        // PbGlass: flag drift above this
+    // Suppress drift warnings for these module types entirely.  Drift values
+    // are still computed and shown in the table (so operators can inspect them
+    // on demand), but the module's state never escalates to "drift" — useful
+    // when a known systematic between baseline calibrations would otherwise
+    // flood the alarm list.  Type names follow hycal_map.json "t" field
+    // (PbGlass / PbWO4 / LMS / Veto); for raw typed JSON we parse via
+    // HyCalSystem::parse_type at init.  Stored as the ModuleType enum cast
+    // to int for O(1) lookup.
+    std::set<int> lms_drift_suppress_types;
+    std::vector<std::string> lms_drift_suppress_type_names;  // echoed in /api/config
+    std::unordered_map<std::string, float> lms_baseline_peak;       // module name → baseline LMS peak
+    std::unordered_map<std::string, float> lms_baseline_ref_peak;   // ref-channel name → baseline LMS peak
 
     // LMS reference channels (for normalization)
     struct LmsRefChannel {
@@ -662,6 +705,11 @@ struct AppState {
     nlohmann::json apiLmsSummary(int ref_index = -1) const;
     nlohmann::json apiLmsModule(int module_index, int ref_index = -1) const;
     nlohmann::json apiLmsRefChannels() const;
+    // Drift-detection is gated on having both per-module and ref-channel
+    // baselines: lamp_scale needs the ref to cancel global LMS-pulser drift.
+    bool driftEnabled() const {
+        return !lms_baseline_peak.empty() && !lms_baseline_ref_peak.empty();
+    }
     nlohmann::json apiEnergyAngle() const;
     nlohmann::json apiMoller() const;
     nlohmann::json apiHycalXY() const;
