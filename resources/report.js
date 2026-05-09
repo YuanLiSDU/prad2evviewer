@@ -446,8 +446,8 @@ async function _summaryPhysics(){
     if((!data||!data.events) && (!ml||!ml.total_events) && (!hxy||!hxy.total_events)) return '';
     const evts=data?.events || ml?.total_events || hxy?.total_events || 0;
     let s=`Events: ${evts}`;
-    if(data?.beam_energy) s+=` | Beam: ${data.beam_energy} MeV`;
-    if(data?.hycal_z) s+=` | HyCal z: ${data.hycal_z/1000}m`;
+    if(data?.beam_energy) s+=` | Beam: ${data.beam_energy.toFixed(2)} MeV`;
+    if(data?.hycal_z) s+=` | HyCal z: ${(data.hycal_z/1000).toFixed(2)}m`;
     if(ml) s+=` | Møller: ${ml.moller_events}`;
     if(hxy) s+=` | HyCalXY: ${hxy.events}`;
     return s+'\n\n';

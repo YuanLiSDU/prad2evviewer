@@ -72,7 +72,7 @@ function plotEnergyAngle(){
         }
         traces.push({x:ex,y:ey,mode:'lines',
             line:{color:THEME.success,width:2,dash:'dot'},
-            name:`ep elastic (${d.beam_energy} MeV)`,
+            name:`ep elastic (${d.beam_energy.toFixed(2)} MeV)`,
             hovertemplate:'θ=%{x:.2f}° E=%{y:.0f} MeV<extra>ep elastic</extra>'});
     }
 
@@ -88,7 +88,7 @@ function plotEnergyAngle(){
 
     // stats line
     const ml=mollerData;
-    let stats=`${d.events} evts | beam: ${d.beam_energy||'?'} MeV`;
+    let stats=`${d.events} evts | beam: ${d.beam_energy>0?d.beam_energy.toFixed(2):'?'} MeV`;
     if(ml) stats+=` | Møller: ${ml.moller_events}`;
     document.getElementById('physics-stats').textContent=stats;
 }
@@ -113,6 +113,27 @@ function plotMollerXY(){
     const fmtA=v=>v!=null?v.toFixed(2):'?';
     const cutTxt=`θ∈[${fmtA(cuts.angle_min)},${fmtA(cuts.angle_max)}]° Esum±${((cuts.energy_tolerance||0.1)*100).toFixed(0)}%`;
 
+    // θ ring overlay: convert the moller angle window into HyCal-plane radii
+    // via r = dz · tan(θ), centered at (target_x, target_y).  dz is the
+    // target→HyCal lever arm — same geometry the server uses to compute the
+    // per-cluster theta in app_state.cpp.
+    const shapes=[...(refShapes('moller_xy')||[])];
+    const target=d.target||[0,0,0];
+    const dz=((d.hycal_z!=null?d.hycal_z:0)-target[2]);
+    if(dz>0 && cuts.angle_min!=null && cuts.angle_max!=null){
+        const cx=target[0], cy=target[1];
+        const ringColor=THEME.accent;
+        [cuts.angle_min,cuts.angle_max].forEach(thDeg=>{
+            const r=dz*Math.tan(thDeg*Math.PI/180);
+            shapes.push({
+                type:'circle', xref:'x', yref:'y',
+                x0:cx-r, x1:cx+r, y0:cy-r, y1:cy+r,
+                line:{color:ringColor,width:1.2,dash:'dash'},
+                fillcolor:'rgba(0,0,0,0)',
+            });
+        });
+    }
+
     Plotly.react(div,[{
         z:z, x:x, y:y,
         type:'heatmap', colorscale:'Hot', reversescale:false,
@@ -125,7 +146,7 @@ function plotMollerXY(){
         xaxis:{...PL.xaxis,title:'X (mm)',scaleanchor:'y',scaleratio:1},
         yaxis:{...PL.yaxis,title:'Y (mm)'},
         margin:{l:50,r:70,t:30,b:35},
-        shapes:refShapes('moller_xy'),
+        shapes:shapes,
     },PC_EPICS);
 }
 

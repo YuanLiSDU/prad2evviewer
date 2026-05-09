@@ -86,6 +86,8 @@ json AppState::apiMoller() const
             {"xy_y_min", moller_xy_y_min}, {"xy_y_max", moller_xy_y_max}, {"xy_y_step", moller_xy_y_step},
             {"moller_events", moller_events},
             {"total_events", cluster_events_processed},
+            {"target",  {target_x, target_y, target_z}},
+            {"hycal_z", hycal_transform.z},
             {"cuts", {{"energy_tolerance", moller_energy_tol},
                       {"angle_min", moller_angle_min}, {"angle_max", moller_angle_max}}}};
 }
