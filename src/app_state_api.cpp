@@ -557,6 +557,25 @@ json AppState::apiEpicsChannels() const
             {"events", epics_events.load()}};
 }
 
+// Time anchor for EPICS snapshots.  We pick the EARLIEST snapshot that
+// actually carries a TI tick (timestamp != 0) — snapshots with timestamp == 0
+// are EPICS events that arrived before any physics event (typical at the
+// start of a run, or right after an ET reconnect when last_ti_ts is reset
+// to 0 and EPICS comes through before any new physics event).  Using the
+// first non-zero snapshot guarantees ti_delta_sec never has to special-case
+// "anchor came later than data"; combined with ti_delta_sec's own guards
+// against now==0 and now<base, this is the fix for the famous
+// 73,786,976,288 s underflow displayed in the EPICS monitor.
+static uint64_t epics_anchor_ts(const epics::EpicsStore &store)
+{
+    int n = store.GetSnapshotCount();
+    for (int i = 0; i < n; ++i) {
+        uint64_t t = store.GetSnapshot(i).timestamp;
+        if (t != 0) return t;
+    }
+    return 0;
+}
+
 json AppState::apiEpicsChannel(const std::string &name) const
 {
     std::lock_guard<std::mutex> lk(epics_mtx);
@@ -567,11 +586,10 @@ json AppState::apiEpicsChannel(const std::string &name) const
     int nsnap = epics.GetSnapshotCount();
     json t_arr = json::array(), v_arr = json::array();
 
-    // time relative to first snapshot's timestamp
-    uint64_t t0 = (nsnap > 0) ? epics.GetSnapshot(0).timestamp : 0;
+    uint64_t t0 = epics_anchor_ts(epics);
     for (int i = 0; i < nsnap; ++i) {
         auto &snap = epics.GetSnapshot(i);
-        double t_sec = static_cast<double>(snap.timestamp - t0) * TI_TICK_SEC;
+        double t_sec = ti_delta_sec(snap.timestamp, t0);
         float val = (id < (int)snap.values.size()) ? snap.values[id] : 0.f;
         t_arr.push_back(std::round(t_sec * 100) / 100);
         v_arr.push_back(val);
@@ -583,12 +601,12 @@ json AppState::apiEpicsBatch(const std::vector<std::string> &names) const
 {
     std::lock_guard<std::mutex> lk(epics_mtx);
     int nsnap = epics.GetSnapshotCount();
-    uint64_t t0 = (nsnap > 0) ? epics.GetSnapshot(0).timestamp : 0;
+    uint64_t t0 = epics_anchor_ts(epics);
 
     // build shared time array once
     json t_arr = json::array();
     for (int i = 0; i < nsnap; ++i) {
-        double t_sec = static_cast<double>(epics.GetSnapshot(i).timestamp - t0) * TI_TICK_SEC;
+        double t_sec = ti_delta_sec(epics.GetSnapshot(i).timestamp, t0);
         t_arr.push_back(std::round(t_sec * 100) / 100);
     }
 

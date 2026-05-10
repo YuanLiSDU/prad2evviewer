@@ -16,6 +16,24 @@
 // TI clock runs at 250 MHz → 4 ns per tick
 static constexpr double TI_TICK_SEC = 4e-9;
 
+// Safe (now − base) seconds.  Both args are uint64 TI ticks; this guards
+// against the classic sign-of-life bug:
+//   uint64_t a - uint64_t b  with a < b  → wraps to ~2^64
+//   ~2^64 × 4 ns = ~73,786,976,288 s, which is what shows up in the
+//   EPICS monitor when a snapshot has no TI anchor (timestamp = 0) and
+//   the anchor t0 was captured later.
+// Treats now == 0 as "no anchor yet" → returns 0 (snapshot stays at the
+// origin instead of producing a fake huge offset).  Negative deltas
+// (now < base, can happen across an ET reconnect or out-of-order events)
+// return as honest negatives instead of wrapping.
+inline double ti_delta_sec(uint64_t now, uint64_t base) {
+    if (now == 0) return 0.0;
+    if (base == 0) return static_cast<double>(now) * TI_TICK_SEC;
+    return (now >= base)
+        ?  static_cast<double>(now  - base) * TI_TICK_SEC
+        : -static_cast<double>(base - now ) * TI_TICK_SEC;
+}
+
 // --- file I/O helpers -------------------------------------------------------
 inline std::string readFile(const std::string &path) {
     std::ifstream f(path);

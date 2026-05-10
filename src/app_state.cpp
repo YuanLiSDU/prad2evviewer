@@ -475,9 +475,10 @@ void AppState::recordSyncTime(uint32_t unix_time, uint64_t last_ti_ts)
     }
 
     sync_unix = unix_time;
-    sync_rel_sec = (last_ti_ts != 0)
-        ? static_cast<double>(last_ti_ts - lms_first_ts) * TI_TICK_SEC
-        : 0.;
+    // ti_delta_sec guards against underflow when last_ti_ts < lms_first_ts
+    // (sync arrived earlier than the first LMS event but after some other
+    // physics event that already advanced last_ti_ts).
+    sync_rel_sec = ti_delta_sec(last_ti_ts, lms_first_ts);
 }
 
 void AppState::processEvent(fdec::EventData &event,
@@ -521,13 +522,15 @@ void AppState::processEvent(fdec::EventData &event,
             if (pending_sync_unix != 0 && sync_unix == 0) {
                 sync_unix = pending_sync_unix;
                 // PRESTART/GO arrives before physics events, so pending_sync_ti is
-                // typically 0. In that case sync_rel_sec = 0 (run start = LMS start).
-                sync_rel_sec = (pending_sync_ti != 0)
-                    ? static_cast<double>(pending_sync_ti - lms_first_ts) * TI_TICK_SEC
-                    : 0.;
+                // typically 0 → ti_delta_sec returns 0 (run start = LMS start).
+                // Also guards the rare reorder case (pending_sync_ti < lms_first_ts).
+                sync_rel_sec = ti_delta_sec(pending_sync_ti, lms_first_ts);
             }
         }
-        lms_time = static_cast<double>(event.info.timestamp - lms_first_ts) * TI_TICK_SEC;
+        // ti_delta_sec keeps lms_time honest if event.info.timestamp ever
+        // comes through as 0 (decoder fall-through) or earlier than the
+        // first LMS event captured (out-of-order ET delivery).
+        lms_time = ti_delta_sec(event.info.timestamp, lms_first_ts);
     }
 
     // --- single pass: analyze once per channel, feed all consumers ---
