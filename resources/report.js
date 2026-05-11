@@ -52,8 +52,8 @@ const REPORT_TABS = [
     {tab:'cluster', title:'Clustering',        filename:'tab_cluster.png', prep:null},
     {tab:'gem',     title:'GEM Detectors',     filename:'tab_gem.png',     prep:null},
     {tab:'gem_apv', title:'GEM APV Waveforms', filename:'tab_gem_apv.png', prep:null},
-    {tab:'epics',   title:'EPICS Slow Control',filename:'tab_epics.png',   prep:null},
-    {tab:'physics', title:'Physics',           filename:'tab_physics.png', prep:null},
+    {tab:'epics',   title:'EPICS Slow Control',filename:'tab_epics.png',   prep:_prepEpicsTab},
+    {tab:'physics', title:'Physics',           filename:'tab_physics.png', prep:_prepPhysicsTab},
 ];
 
 // Tab panel IDs corresponding to each REPORT_TABS entry (and a couple of
@@ -123,6 +123,35 @@ function _prepLmsTab(){
             if(typeof geoLms==='function') geoLms();
         }
     };
+}
+
+// Re-render every Plotly plot in the tab AFTER it has been switched
+// visible.  refreshDataForReport prefetched the data + ran the relevant
+// plot* call while the panel was still display:none, so Plotly's
+// _fullLayout was computed against a zero/default container —
+// autorange / ticks / legend / heatmap aspect all come out different
+// from the live monitor.  switchTab + Plotly.Plots.resize alone do
+// NOT re-run the trace pipeline (resize only updates dimensions), so
+// for plots that were react'd while hidden we have to re-call the
+// plot* function to get Plotly.react against the now-correct
+// geometry.  No state to restore — the next live refresh will
+// reapply the same data anyway — but we still return a no-op restore
+// so captureTabScreenshot waits THEME_SETTLE_MS for Plotly to land
+// its re-render before the screenshot fires.
+function _prepEpicsTab(){
+    if(typeof plotEpicsSlot==='function' &&
+       typeof EPICS_NUM_SLOTS!=='undefined')
+    {
+        for(let i=0;i<EPICS_NUM_SLOTS;i++) plotEpicsSlot(i);
+    }
+    return ()=>{};
+}
+
+function _prepPhysicsTab(){
+    if(typeof plotEnergyAngle==='function') plotEnergyAngle();
+    if(typeof plotMollerXY==='function')    plotMollerXY();
+    if(typeof plotHycalXY==='function')     plotHycalXY();
+    return ()=>{};
 }
 
 function _gatherCss(){
