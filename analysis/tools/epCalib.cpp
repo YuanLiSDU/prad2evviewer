@@ -24,6 +24,7 @@
 #include "PhysicsTools.h"
 #include "HyCalSystem.h"
 #include "HyCalCluster.h"
+#include "HyCalTimeCuts.h"
 #include "WaveAnalyzer.h"
 #include "EventData.h"
 #include "EventData_io.h"
@@ -271,8 +272,17 @@ int main(int argc, char *argv[])
                 prad2::SetRawReadBranches(tree, ev);
 
                 int run_num = get_run_int(root_files[fi]);
-                auto localConfig = LoadRunConfig(db_dir + "/runinfo/2p1_general.json", run_num);
+                auto localConfig = LoadRunConfig(db_dir + "/runinfo/general.json", run_num);
                 //auto gain_correction = prad2::ComputeGainCorrection(localConfig.gain_data_dir, run_num, localConfig.gain_ref_run);
+
+                // Per-module HyCal time-cut table.  When the runinfo entry
+                // doesn't reference a per-module file the table is uniform.
+                std::string hc_time_path = localConfig.hycal_time_cut_file.empty()
+                    ? std::string()
+                    : db_dir + "/" + localConfig.hycal_time_cut_file;
+                auto hc_time_cuts = prad2::LoadHyCalTimeCuts(
+                    hc_time_path, res->hycal,
+                    localConfig.hc_time_win_lo, localConfig.hc_time_win_hi);
 
                 fdec::HyCalCluster clusterer(res->hycal);
                 fdec::ClusterConfig cl_cfg;
@@ -300,11 +310,12 @@ int main(int argc, char *argv[])
                         float adc = 0.f;
 
                         if(!firmware_peaks){
+                            const auto hc_win = hc_time_cuts.at(mod->index);
                             int bestIdx = -1;
                             float bestHeight = -1.f;
                             for(int p = 0; p < ev.npeaks[j]; ++p){
-                                if(ev.peak_time[j][p] > localConfig.hc_time_win_lo &&
-                                    ev.peak_time[j][p] < localConfig.hc_time_win_hi) {
+                                if(ev.peak_time[j][p] > hc_win.lo &&
+                                    ev.peak_time[j][p] < hc_win.hi) {
                                     if(ev.peak_integral[j][p] > bestHeight) {
                                         bestHeight = ev.peak_integral[j][p];
                                         bestIdx = p;

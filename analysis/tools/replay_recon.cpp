@@ -134,7 +134,7 @@ int main(int argc, char *argv[])
 
     std::string run_str = get_run_str(evio_files[0]);
     int run_num = get_run_int(evio_files[0]);
-    gRunConfig = LoadRunConfig(db_dir + "/runinfo/2p1_general.json", run_num);
+    gRunConfig = LoadRunConfig(db_dir + "/runinfo/general.json", run_num);
 
     // shared work queue: atomic index into file list
     std::atomic<int> next_file{0};

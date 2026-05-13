@@ -537,6 +537,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     fdec::HyCalSystem                 hycal;
     gem::GemSystem                    gem_sys;
     fdec::ClusterConfig               cluster_cfg;
+    prad2::HyCalTimeCuts              hc_time_cuts;
     DetectorTransform                 hycal_transform;
     std::array<DetectorTransform, 4>  gem_transforms;
     std::unordered_map<int, int>      roc_to_crate;
@@ -571,6 +572,12 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
         auto t = analysis::BuildLabTransforms(gRunConfig);
         hycal_transform = t.hycal;
         gem_transforms  = t.gem;
+
+        // PRad-1 has no per-module time-cut file; build a uniform table so
+        // the per-event loop uses the same call as PRad-II.
+        hc_time_cuts = prad2::LoadHyCalTimeCuts(
+            "", hycal,
+            gRunConfig.hc_time_win_lo, gRunConfig.hc_time_win_hi);
     } else {
         // PRad-II: hand off to the canonical PipelineBuilder.  daq_cfg_ moves
         // through the builder (which then attaches map paths) and comes back
@@ -593,6 +600,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
         hycal            = std::move(pipeline.hycal);
         gem_sys          = std::move(pipeline.gem);
         cluster_cfg      = pipeline.hycal_cluster_cfg;
+        hc_time_cuts     = std::move(pipeline.hycal_time_cuts);
         hycal_transform  = pipeline.hycal_transform;
         gem_transforms   = pipeline.gem_transforms;
 
@@ -819,14 +827,15 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
                                 ana.Analyze(cd.samples, cd.nsamples, wres);
                                 if (wres.npeaks <= 0) continue;
 
+                                const auto hc_win = hc_time_cuts.at(mod->index);
                                 if (cluster_cfg.seed_time_window > 0.f) {
                                     // Multi-pulse mode: push every peak inside the trigger
                                     // window into the clusterer; the seed-anchored timing
                                     // coincidence cut is applied inside HyCalCluster.
                                     for (int p = 0; p < wres.npeaks && p < fdec::MAX_PEAKS; ++p) {
                                         const auto &pk = wres.peaks[p];
-                                        if (pk.time <= gRunConfig.hc_time_win_lo) continue;
-                                        if (pk.time >= gRunConfig.hc_time_win_hi) continue;
+                                        if (pk.time <= hc_win.lo) continue;
+                                        if (pk.time >= hc_win.hi) continue;
                                         float adc = pk.integral * gain;
                                         float energy = static_cast<float>(mod->energize(adc));
                                         clusterer.AddHit(mod->index, energy, pk.time);
@@ -840,8 +849,8 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
                                     float bestHeight = -1.f;
                                     for (int p = 0; p < wres.npeaks && p < fdec::MAX_PEAKS; ++p) {
                                         const auto &pk = wres.peaks[p];
-                                        if (pk.time > gRunConfig.hc_time_win_lo &&
-                                            pk.time < gRunConfig.hc_time_win_hi &&
+                                        if (pk.time > hc_win.lo &&
+                                            pk.time < hc_win.hi &&
                                             pk.height > bestHeight) {
                                             bestHeight = pk.height;
                                             bestIdx = p;

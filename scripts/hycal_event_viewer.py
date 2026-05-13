@@ -2587,7 +2587,7 @@ class HyCalEventViewer(QMainWindow):
 
     def _guess_database_dir(self) -> Optional[str]:
         """Pick a database dir for resolving recon-config-internal paths
-        (e.g., 'runinfo': 'runinfo/2p1_general.json').  We prefer the
+        (e.g., 'runinfo': 'runinfo/general.json').  We prefer the
         parent of whichever full-path config the user actually pointed at
         — recon, daq, hycal-map, in that order — so the resolved paths
         stay self-consistent with the rest of their tree."""

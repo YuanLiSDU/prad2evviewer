@@ -1,0 +1,89 @@
+{
+    "// Run-period geometry + calibration metadata.  Three tiers:":                                                                  "",
+    "//   defaults       — fields that almost never change (invariants).":                                                            "",
+    "//   configurations — sparse period entries; each overlays defaults.":                                                           "",
+    "//                    Lookup picks the largest from_run <= run_num.":                                                            "",
+    "//   gem_pedestals  — per-run pedestal/CM table; lookup is independent":                                                         "",
+    "//                    of configurations (same largest-from_run <= run_num rule).":                                               "",
+    "//":                                                                                                                             "",
+    "// `from_run` is the trigger key; `run_number` is accepted as an alias for":                                                     "",
+    "// backward-compat with older runinfo files.":                                                                                   "",
+    "//":                                                                                                                             "",
+    "// Per-detector GEM entries merge by `id`: defaults provides tilting once,":                                                     "",
+    "// each period provides position[id].  No chained inheritance between":                                                          "",
+    "// configurations — duplicate explicitly if two periods share survey.":                                                          "",
+
+    "defaults": {
+        "calibration":   {"default_adc2mev": 0.12},
+        "target":        [0.0, 0.0, 0.0],
+        "hycal":         {"tilting": [0.0, 0.0, 0.0]},
+        "gem": {
+            "detectors": [
+                {"id": 0, "tilting": [180.0, 0.0,   0.0]},
+                {"id": 1, "tilting": [180.0, 0.0, 180.0]},
+                {"id": 2, "tilting": [180.0, 0.0,   0.0]},
+                {"id": 3, "tilting": [180.0, 0.0, 180.0]}
+            ]
+        },
+        "matching":      {"radius": 15.0, "use_square_cut": true},
+        "gain_factor":   {"data_dir": "/home/clasrun/prad2_daq/gain_monitoring/gain_monitor_output"}
+    },
+
+    "configurations": [
+        {
+            "from_run":    0,
+            "beam_energy": 2108.8,
+            "calibration": {"file": "calibration/calibration_factor_2p1.json"},
+            "hycal":       {"position": [-0.48, 1.39, 6269.81]},
+            "gem": {"detectors": [
+                {"id": 0, "position": [-229.26, 1.5, 5805.0]},
+                {"id": 1, "position": [ 226.70, 1.5, 5850.0]},
+                {"id": 2, "position": [-228.80, 1.8, 5413.0]},
+                {"id": 3, "position": [ 227.00, 1.3, 5458.9]}
+            ]},
+            "time_cuts":   {"hc_time_window": [60.0, 400.0]},
+            "gain_factor": {"data_dir": "gain_factor", "ref_run": 23960}
+        },
+        {
+            "from_run":    24185,
+            "beam_energy": 3488.43,
+            "calibration": {"file": "calibration/calibration_factor_3p5.json"},
+            "hycal":       {"position": [-0.70, -1.83, 6269.81]},
+            "gem": {"detectors": [
+                {"id": 0, "position": [-229.16, -2.2, 5817.0]},
+                {"id": 1, "position": [ 226.35, -1.4, 5853.8]},
+                {"id": 2, "position": [-229.10, -1.0, 5414.0]},
+                {"id": 3, "position": [ 226.53, -1.2, 5458.0]}
+            ]},
+            "time_cuts":   {"hc_time_window": [130.0, 200.0]},
+            "gain_factor": {"ref_run": 24200}
+        },
+        {
+            "from_run":    24551,
+            "beam_energy": 728.9,
+            "calibration": {"file": "calibration/calibration_factor_3p5.json"},
+            "hycal":       {"position": [-0.70, -1.83, 6269.81]},
+            "gem": {"detectors": [
+                {"id": 0, "position": [-229.16, -2.2, 5817.0]},
+                {"id": 1, "position": [ 226.35, -1.4, 5853.8]},
+                {"id": 2, "position": [-229.10, -1.0, 5414.0]},
+                {"id": 3, "position": [ 226.53, -1.2, 5458.0]}
+            ]},
+            "time_cuts":   {"hc_time_window": [130.0, 200.0]},
+            "gain_factor": {"ref_run": 24200}
+        }
+    ],
+
+    "// Per-run GEM pedestals + common-mode range.  Bumping pedestals on a":                                                          "",
+    "// new run only requires appending one row here — no need to touch":                                                             "",
+    "// the configurations array.":                                                                                                   "",
+    "gem_pedestals": [
+        {"from_run":     0, "pedestal_file": "gem_peds/peds_24177.txt",    "common_mode_file": "gem_peds/cm_24177.txt"},
+        {"from_run": 24023, "pedestal_file": "gem_peds/gem_ped_24023.dat", "common_mode_file": "gem_peds/CommonModeRange_24023.txt"},
+        {"from_run": 24162, "pedestal_file": "gem_peds/gem_ped_24162.dat", "common_mode_file": "gem_peds/CommonModeRange_24162.txt"},
+        {"from_run": 24177, "pedestal_file": "gem_peds/gem_ped_24177.dat", "common_mode_file": "gem_peds/CommonModeRange_24177.txt"},
+        {"from_run": 24436, "pedestal_file": "gem_peds/gem_ped_24436.dat", "common_mode_file": "gem_peds/CommonModeRange_24436.txt"},
+        {"from_run": 24495, "pedestal_file": "gem_peds/gem_ped_24495.dat", "common_mode_file": "gem_peds/CommonModeRange_24495.txt"},
+        {"from_run": 24535, "pedestal_file": "gem_peds/gem_ped_24535.dat", "common_mode_file": "gem_peds/CommonModeRange_24535.txt"}
+    ]
+}

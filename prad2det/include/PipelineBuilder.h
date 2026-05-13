@@ -33,6 +33,7 @@
 #include "GemSystem.h"
 #include "HyCalCluster.h"    // fdec::ClusterConfig (HyCal clusterer knobs)
 #include "HyCalSystem.h"
+#include "HyCalTimeCuts.h"   // prad2::HyCalTimeCuts (per-module time window)
 #include "RunInfoConfig.h"
 
 #include "DaqConfig.h"       // evc::DaqConfig — pulled in from prad2dec
@@ -68,6 +69,11 @@ struct Pipeline {
     // already installed inside `gem` via SetReconConfigs.
     fdec::ClusterConfig                hycal_cluster_cfg;
 
+    // Per-module HyCal peak-time windows.  Always sized to hycal.module_count()
+    // when build() succeeds (uniform default when no per-module file).  Use
+    // `at(mod->index)` or `in_window(mod->index, t)` in the per-event loop.
+    HyCalTimeCuts                      hycal_time_cuts;
+
     // Geometry — set() already called, rotation matrix cached.
     DetectorTransform                  hycal_transform;
     std::array<DetectorTransform, 4>   gem_transforms;
@@ -91,6 +97,7 @@ struct Pipeline {
     std::string                        hycal_map_path;
     std::string                        gem_map_path;
     std::string                        hycal_calib_path;
+    std::string                        hycal_time_cut_path;     // optional per-module window file
     std::string                        gem_pedestal_path;
     std::string                        gem_common_mode_path;
 
@@ -127,6 +134,7 @@ public:
     PipelineBuilder &set_hycal_map(std::string p);
     PipelineBuilder &set_gem_map(std::string p);
     PipelineBuilder &set_hycal_calib(std::string p);
+    PipelineBuilder &set_hycal_time_cut(std::string p);
     PipelineBuilder &set_gem_pedestal(std::string p);
     PipelineBuilder &set_gem_common_mode(std::string p);
 
@@ -171,6 +179,7 @@ private:
     std::string hycal_map_path_;
     std::string gem_map_path_;
     std::string hycal_calib_path_;
+    std::string hycal_time_cut_path_;
     std::string gem_pedestal_path_;
     std::string gem_common_mode_path_;
 

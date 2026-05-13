@@ -107,6 +107,7 @@ PipelineBuilder &PipelineBuilder::set_runinfo(std::string p)           { runinfo
 PipelineBuilder &PipelineBuilder::set_hycal_map(std::string p)         { hycal_map_path_       = std::move(p); return *this; }
 PipelineBuilder &PipelineBuilder::set_gem_map(std::string p)           { gem_map_path_         = std::move(p); return *this; }
 PipelineBuilder &PipelineBuilder::set_hycal_calib(std::string p)       { hycal_calib_path_     = std::move(p); return *this; }
+PipelineBuilder &PipelineBuilder::set_hycal_time_cut(std::string p)    { hycal_time_cut_path_  = std::move(p); return *this; }
 PipelineBuilder &PipelineBuilder::set_gem_pedestal(std::string p)      { gem_pedestal_path_    = std::move(p); return *this; }
 PipelineBuilder &PipelineBuilder::set_gem_common_mode(std::string p)   { gem_common_mode_path_ = std::move(p); return *this; }
 PipelineBuilder &PipelineBuilder::set_run_number(int n)                { run_number_ = n; return *this; }
@@ -276,6 +277,30 @@ Pipeline PipelineBuilder::build()
         LOG(oss.str());
     } else {
         LOG("[WARN] no HyCal calibration file — energies will be wrong.");
+    }
+
+    // --- 7b. HyCal per-module time-cut table -----------------------------
+    // Always populate `out.hycal_time_cuts` (uniform default when no file)
+    // so per-event callers can use a single code path.  The path comes
+    // from runinfo's `time_cuts.hycal_module_file` unless overridden.
+    {
+        std::string hc_time_path = hycal_time_cut_path_.empty()
+            ? resolve(out.run_cfg.hycal_time_cut_file)
+            : resolve(hycal_time_cut_path_);
+        out.hycal_time_cuts = prad2::LoadHyCalTimeCuts(
+            hc_time_path, out.hycal,
+            out.run_cfg.hc_time_win_lo, out.run_cfg.hc_time_win_hi);
+        out.hycal_time_cut_path = hc_time_path;
+
+        std::ostringstream oss;
+        oss << "[setup] HC time   : default=["
+            << out.hycal_time_cuts.default_lo << ", "
+            << out.hycal_time_cuts.default_hi << "] ns";
+        if (out.hycal_time_cuts.n_overrides > 0) {
+            oss << "  per-module=" << out.hycal_time_cuts.n_overrides
+                << " (" << hc_time_path << ")";
+        }
+        LOG(oss.str());
     }
 
     // --- 8. matching (HyCal sigma + GEM sigma + target sigma) ------------

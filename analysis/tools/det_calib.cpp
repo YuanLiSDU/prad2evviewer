@@ -115,7 +115,7 @@ int main(int argc, char *argv[])
 
     // --- load detector geometry config from JSON ---
     if (run_config.empty()) {
-        run_config = dbDir + "/runinfo/2p1_general.json";
+        run_config = dbDir + "/runinfo/general.json";
     }
     RunConfig geo = LoadRunConfig(run_config, run_num);
 

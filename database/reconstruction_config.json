@@ -3,7 +3,7 @@
     "// Loaded by prad2_server -r and by analysis tools (Replay, matching, det_calib).": "",
     "// Sister files: monitor_config.json (GUI) and daq_config.json (DAQ + raw decoding).": "",
 
-    "runinfo": "runinfo/2p1_general.json",
+    "runinfo": "runinfo/general.json",
 
     "hycal": {
         "// HyCal island clustering — mirrors fdec::ClusterConfig defaults.": "",

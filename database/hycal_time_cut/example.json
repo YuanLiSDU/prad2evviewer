@@ -1,0 +1,19 @@
+{
+    "// Per-module HyCal peak-time window (ns). Modules not listed here":          "",
+    "// use the `default` window below. If `default` is omitted, the":             "",
+    "// runinfo `time_cuts.hc_time_window` is used as the fallback.":              "",
+    "//":                                                                          "",
+    "// Module names match calibration_factor_*.json (e.g. \"G123\", \"W735\")":   "",
+    "// — they are resolved via fdec::HyCalSystem::module_by_name().":             "",
+    "//":                                                                          "",
+    "// Wire this file into a runinfo period entry like so:":                      "",
+    "//":                                                                          "",
+    "//   \"time_cuts\": {":                                                       "",
+    "//       \"hc_time_window\":    [130.0, 200.0],":                             "",
+    "//       \"hycal_module_file\": \"hycal_time_cut/example.json\"":             "",
+    "//   }":                                                                      "",
+
+    "default": [130.0, 200.0],
+    "modules": [
+    ]
+}

@@ -3,21 +3,34 @@
 // RunInfoConfig.h — run-period detector geometry / calibration metadata
 //
 // Shared across the viewer/server, analysis tools, Python bindings, and
-// ROOT scripts. Loads the nested-format runinfo file:
+// ROOT scripts.  Loads the three-tier runinfo file:
 //
 //     {
-//       "configurations": [
-//         {"run_number":     0, "beam_energy": 2100.0, "calibration": {...},
-//          "target": [...], "hycal": {...}, "gem": [...],
-//          "time_cuts": {...}, "matching": {...}},
-//         {"run_number": 23000, ...}
+//       "defaults": {                         // invariants — merged under
+//         "target": [...], "matching": {...}, // every configurations entry.
+//         "gem": {"detectors": [{"id":0,"tilting":[...]}, ...]}
+//       },
+//       "configurations": [                   // sparse period entries.
+//         {"from_run":     0, "beam_energy": 2100.0, ...},
+//         {"from_run": 24185, ...}
+//       ],
+//       "gem_pedestals": [                    // independent per-run table.
+//         {"from_run":     0, "pedestal_file": "...", "common_mode_file": "..."},
+//         {"from_run": 24023, ...}
 //       ]
 //     }
 //
-// LoadRunConfig() picks the entry with the largest run_number <= the
-// requested run, or the largest entry if run_num < 0 ("latest").
+// Lookup rules (all use largest from_run <= run_num; latest entry if
+// run_num < 0):
+//   * configurations: pick one entry, overlay it on `defaults`.
+//   * gem_pedestals: pick one entry, override gem.pedestal_file /
+//     gem.common_mode_file from the merged result.
 //
-// Header-only (nlohmann::json + std). Lives in prad2det/include/ so all
+// `run_number` is accepted as an alias for `from_run`, and either of the
+// new blocks may be omitted — older runinfo files (no defaults, no
+// gem_pedestals; gem.pedestal_file inline in each entry) still load.
+//
+// Header-only (nlohmann::json + std).  Lives in prad2det/include/ so all
 // libraries can pull it in without dragging analysis/ROOT dependencies.
 //=============================================================================
 
@@ -36,7 +49,7 @@ namespace prad2 {
 // fail to load a runinfo file still produce sensible numbers.
 struct RunConfig {
     std::string energy_calib_file;
-    float default_adc2mev = 0.078f;
+    float default_adc2mev = 0.12f;
     float Ebeam     = 0.f;
     float target_x  = 0.f;
     float target_y  = 0.f;
@@ -66,12 +79,19 @@ struct RunConfig {
     // For gain correction: which run to use as reference for computing the correction factors.  If negative, use the latest run with gain factors available.
     std::string gain_data_dir = "";
     int gain_ref_run = 23915;
+    // Optional per-module HyCal peak-time window file (relative to database
+    // dir).  Empty -> uniform [hc_time_win_lo, hc_time_win_hi] from runinfo
+    // is used for every module.  See prad2det/include/HyCalTimeCuts.h.
+    std::string hycal_time_cut_file;
 };
 
 // Returns a RunConfig populated from the best-matching entry in `path`.
-// Selection rule:
-//   run_num >= 0 -> entry with the largest run_number that is <= run_num
-//   run_num <  0 -> entry with the largest run_number ("latest")
+//
+// Selection rule (applied independently to `configurations` and to
+// `gem_pedestals`):
+//   run_num >= 0 -> entry with the largest from_run that is <= run_num
+//   run_num <  0 -> entry with the largest from_run ("latest")
+// `run_number` is accepted as an alias for `from_run`.
 //
 // On any failure (file missing, parse error, no "configurations" array,
 // no matching entry) emits a warning and returns the default-constructed
@@ -99,100 +119,151 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
         return result;
     }
 
-    const nlohmann::json *best = nullptr;
-    int best_run = -1;
+    // Pull the trigger-run integer off an entry; supports `from_run` (new)
+    // and `run_number` (legacy alias).  Returns -1 if neither is present.
+    auto entry_from_run = [](const nlohmann::json &e) -> int {
+        if (e.contains("from_run"))   return e["from_run"].get<int>();
+        if (e.contains("run_number")) return e["run_number"].get<int>();
+        return -1;
+    };
+
+    // Pick the largest entry with from_run <= run_num (or the largest
+    // overall when run_num < 0).
+    auto pick_best = [&](const nlohmann::json &arr) -> std::pair<const nlohmann::json *, int> {
+        const nlohmann::json *best = nullptr;
+        int best_run = -1;
+        for (const auto &e : arr) {
+            int rn = entry_from_run(e);
+            if (rn < 0) continue;
+            if (run_num < 0) {
+                if (rn > best_run) { best = &e; best_run = rn; }
+            } else if (rn <= run_num && rn > best_run) {
+                best = &e; best_run = rn;
+            }
+        }
+        return {best, best_run};
+    };
+
+    // Field-by-field overlay.  Called with `defaults` first (if present),
+    // then the picked configurations entry — each pass only writes fields
+    // it actually contains, so the period entry overlays defaults.
+    auto apply_entry = [&](const nlohmann::json &c) {
+        if (c.contains("beam_energy")) result.Ebeam = c["beam_energy"].get<float>();
+        if (c.contains("calibration")) {
+            const auto &cal = c["calibration"];
+            if (cal.contains("file"))            result.energy_calib_file = cal["file"].get<std::string>();
+            if (cal.contains("default_adc2mev")) result.default_adc2mev   = cal["default_adc2mev"].get<float>();
+        }
+        if (c.contains("target") && c["target"].is_array() && c["target"].size() >= 3) {
+            result.target_x = c["target"][0].get<float>();
+            result.target_y = c["target"][1].get<float>();
+            result.target_z = c["target"][2].get<float>();
+        }
+        if (c.contains("hycal")) {
+            const auto &h = c["hycal"];
+            if (h.contains("position") && h["position"].is_array() && h["position"].size() >= 3) {
+                result.hycal_x = h["position"][0].get<float>();
+                result.hycal_y = h["position"][1].get<float>();
+                result.hycal_z = h["position"][2].get<float>();
+            }
+            if (h.contains("tilting") && h["tilting"].is_array() && h["tilting"].size() >= 3) {
+                result.hycal_tilt_x = h["tilting"][0].get<float>();
+                result.hycal_tilt_y = h["tilting"][1].get<float>();
+                result.hycal_tilt_z = h["tilting"][2].get<float>();
+            }
+        }
+        if (c.contains("gem") && c["gem"].is_object()) {
+            const auto &g = c["gem"];
+            if (g.contains("pedestal_file"))    result.gem_pedestal_file    = g["pedestal_file"].get<std::string>();
+            if (g.contains("common_mode_file")) result.gem_common_mode_file = g["common_mode_file"].get<std::string>();
+            if (g.contains("detectors") && g["detectors"].is_array()) {
+                for (const auto &d : g["detectors"]) {
+                    if (!d.contains("id")) continue;
+                    int id = d["id"].get<int>();
+                    if (id < 0 || id >= 4) continue;
+                    if (d.contains("position") && d["position"].is_array() && d["position"].size() >= 3) {
+                        result.gem_x[id] = d["position"][0].get<float>();
+                        result.gem_y[id] = d["position"][1].get<float>();
+                        result.gem_z[id] = d["position"][2].get<float>();
+                    }
+                    if (d.contains("tilting") && d["tilting"].is_array() && d["tilting"].size() >= 3) {
+                        result.gem_tilt_x[id] = d["tilting"][0].get<float>();
+                        result.gem_tilt_y[id] = d["tilting"][1].get<float>();
+                        result.gem_tilt_z[id] = d["tilting"][2].get<float>();
+                    }
+                }
+            }
+        }
+        if (c.contains("time_cuts")) {
+            const auto &tc = c["time_cuts"];
+            if (tc.contains("hc_time_window") && tc["hc_time_window"].is_array()
+                    && tc["hc_time_window"].size() >= 2) {
+                result.hc_time_win_lo = tc["hc_time_window"][0].get<float>();
+                result.hc_time_win_hi = tc["hc_time_window"][1].get<float>();
+            }
+            if (tc.contains("hycal_module_file"))
+                result.hycal_time_cut_file = tc["hycal_module_file"].get<std::string>();
+        }
+        if (c.contains("matching")) {
+            const auto &m = c["matching"];
+            if (m.contains("radius"))         result.matching_radius     = m["radius"].get<float>();
+            if (m.contains("use_square_cut")) result.matching_use_square = m["use_square_cut"].get<bool>();
+        }
+        if (c.contains("gain_factor") && c["gain_factor"].is_object()) {
+            const auto &gf = c["gain_factor"];
+            if (gf.contains("data_dir")) result.gain_data_dir = gf["data_dir"].get<std::string>();
+            if (gf.contains("ref_run"))  result.gain_ref_run  = gf["ref_run"].get<int>();
+        }
+    };
+
     if (run_num < 0) {
         std::cerr << "Warning: unknown run number, picking the entry with "
-                     "the largest run_number from " << path << ".\n";
+                     "the largest from_run from " << path << ".\n";
     }
-    for (const auto &entry : cfg["configurations"]) {
-        if (!entry.contains("run_number")) continue;
-        int rn = entry["run_number"].get<int>();
-        if (run_num < 0) {
-            if (rn > best_run) { best = &entry; best_run = rn; }
-        } else if (rn <= run_num && rn > best_run) {
-            best = &entry; best_run = rn;
-        }
-    }
+
+    // 1) defaults first (no-op if absent).
+    if (cfg.contains("defaults") && cfg["defaults"].is_object())
+        apply_entry(cfg["defaults"]);
+
+    // 2) picked configurations entry overlays defaults.
+    auto [best, best_run] = pick_best(cfg["configurations"]);
     if (best == nullptr) {
         std::cerr << "Warning: no matching configuration in " << path
                   << " for run " << run_num << ", using defaults.\n";
         return result;
     }
+    apply_entry(*best);
 
-    const auto &c = *best;
-    if (c.contains("beam_energy")) result.Ebeam = c["beam_energy"].get<float>();
-    if (c.contains("calibration")) {
-        const auto &cal = c["calibration"];
-        if (cal.contains("file"))            result.energy_calib_file = cal["file"].get<std::string>();
-        if (cal.contains("default_adc2mev")) result.default_adc2mev   = cal["default_adc2mev"].get<float>();
-    }
-    if (c.contains("target") && c["target"].is_array() && c["target"].size() >= 3) {
-        result.target_x = c["target"][0].get<float>();
-        result.target_y = c["target"][1].get<float>();
-        result.target_z = c["target"][2].get<float>();
-    }
-    if (c.contains("hycal")) {
-        const auto &h = c["hycal"];
-        if (h.contains("position") && h["position"].is_array() && h["position"].size() >= 3) {
-            result.hycal_x = h["position"][0].get<float>();
-            result.hycal_y = h["position"][1].get<float>();
-            result.hycal_z = h["position"][2].get<float>();
-        }
-        if (h.contains("tilting") && h["tilting"].is_array() && h["tilting"].size() >= 3) {
-            result.hycal_tilt_x = h["tilting"][0].get<float>();
-            result.hycal_tilt_y = h["tilting"][1].get<float>();
-            result.hycal_tilt_z = h["tilting"][2].get<float>();
+    // 3) gem_pedestals: independent lookup; overrides the gem.*_file fields
+    //    so a new pedestal can be added without touching configurations.
+    int best_ped_run = -1;
+    if (cfg.contains("gem_pedestals") && cfg["gem_pedestals"].is_array()) {
+        auto [ped, ped_run] = pick_best(cfg["gem_pedestals"]);
+        if (ped != nullptr) {
+            if (ped->contains("pedestal_file"))
+                result.gem_pedestal_file    = (*ped)["pedestal_file"].get<std::string>();
+            if (ped->contains("common_mode_file"))
+                result.gem_common_mode_file = (*ped)["common_mode_file"].get<std::string>();
+            best_ped_run = ped_run;
         }
     }
-    if (c.contains("gem") && c["gem"].is_object()) {
-        const auto &g = c["gem"];
-        if (g.contains("pedestal_file"))    result.gem_pedestal_file    = g["pedestal_file"].get<std::string>();
-        if (g.contains("common_mode_file")) result.gem_common_mode_file = g["common_mode_file"].get<std::string>();
-        if (g.contains("detectors") && g["detectors"].is_array()) {
-            for (const auto &d : g["detectors"]) {
-                if (!d.contains("id")) continue;
-                int id = d["id"].get<int>();
-                if (id < 0 || id >= 4) continue;
-                if (d.contains("position") && d["position"].is_array() && d["position"].size() >= 3) {
-                    result.gem_x[id] = d["position"][0].get<float>();
-                    result.gem_y[id] = d["position"][1].get<float>();
-                    result.gem_z[id] = d["position"][2].get<float>();
-                }
-                if (d.contains("tilting") && d["tilting"].is_array() && d["tilting"].size() >= 3) {
-                    result.gem_tilt_x[id] = d["tilting"][0].get<float>();
-                    result.gem_tilt_y[id] = d["tilting"][1].get<float>();
-                    result.gem_tilt_z[id] = d["tilting"][2].get<float>();
-                }
-            }
-        }
-    }
-    if (c.contains("time_cuts")) {
-        const auto &tc = c["time_cuts"];
-        if (tc.contains("hc_time_window") && tc["hc_time_window"].is_array()
-                && tc["hc_time_window"].size() >= 2) {
-            result.hc_time_win_lo = tc["hc_time_window"][0].get<float>();
-            result.hc_time_win_hi = tc["hc_time_window"][1].get<float>();
-        }
-    }
-    if (c.contains("matching")) {
-        const auto &m = c["matching"];
-        if (m.contains("radius"))         result.matching_radius     = m["radius"].get<float>();
-        if (m.contains("use_square_cut")) result.matching_use_square = m["use_square_cut"].get<bool>();
-    }
-    if (c.contains("gain_factor") && c["gain_factor"].is_object()) {
-        const auto &gf = c["gain_factor"];
-        if (gf.contains("data_dir")) result.gain_data_dir = gf["data_dir"].get<std::string>();
-        if (gf.contains("ref_run"))  result.gain_ref_run  = gf["ref_run"].get<int>();
-    }
-    std::cerr << "RunInfo   : loaded run_number=" << best_run
-              << " from " << path << "\n";
+
+    std::cerr << "RunInfo   : loaded from_run=" << best_run;
+    if (best_ped_run >= 0) std::cerr << "  ped_from_run=" << best_ped_run;
+    std::cerr << " from " << path << "\n";
     return result;
 }
 
 // Append (or overwrite by run_number) an entry into the "configurations"
 // array of `path`. Creates the file if missing. Sorts the array by
 // run_number for readability. Atomic-rename via tmp file.
+//
+// NOTE: this writes a flat, fully-specified entry — it does NOT split into
+// the defaults / gem_pedestals tiers.  Round-trips through LoadRunConfig
+// correctly (run_number is accepted as a from_run alias, and inline gem
+// pedestal paths are still merged), but the resulting file mixes tier
+// shapes if it already had a `defaults` / `gem_pedestals` block.  For
+// programmatic pedestal table updates, edit `gem_pedestals` directly.
 inline bool WriteRunConfig(const std::string &path, int run_num,
                            const RunConfig &geo)
 {

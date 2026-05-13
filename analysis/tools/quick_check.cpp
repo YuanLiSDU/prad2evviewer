@@ -93,7 +93,7 @@ int main(int argc, char *argv[])
 
     // --- load run config: assign run_id and Ebeam from gRunConfig ---
     run_id = analysis::get_run_int(root_files[0]);
-    gRunConfig = analysis::LoadRunConfig(dbDir + "/runinfo/2p1_general.json", run_id);
+    gRunConfig = analysis::LoadRunConfig(dbDir + "/runinfo/general.json", run_id);
     Ebeam = gRunConfig.Ebeam > 0.f ? gRunConfig.Ebeam : Ebeam;
 
     std::cout << "Processing run " << run_id << " with Ebeam = " << Ebeam << " MeV\n";

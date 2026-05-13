@@ -43,6 +43,7 @@
 #include "GemPedestal.h"
 #include "HyCalSystem.h"
 #include "HyCalCluster.h"
+#include "HyCalTimeCuts.h"
 #include "DetectorTransform.h"
 #include "PipelineBuilder.h"
 #include "RunInfoConfig.h"
@@ -968,7 +969,29 @@ static void bind_pipeline(py::module_ &m)
         .def_readonly("gem_pedestal_file",    &prad2::RunConfig::gem_pedestal_file)
         .def_readonly("gem_common_mode_file", &prad2::RunConfig::gem_common_mode_file)
         .def_readonly("hc_time_win_lo",       &prad2::RunConfig::hc_time_win_lo)
-        .def_readonly("hc_time_win_hi",       &prad2::RunConfig::hc_time_win_hi);
+        .def_readonly("hc_time_win_hi",       &prad2::RunConfig::hc_time_win_hi)
+        .def_readonly("hycal_time_cut_file",  &prad2::RunConfig::hycal_time_cut_file);
+
+    // HyCalTimeCuts — per-module HyCal peak-time window with a default
+    // fallback (uniform when no per-module file is present).  Sized to
+    // hycal.module_count(); use `at(mod.index)` in the per-event loop.
+    py::class_<prad2::HyCalTimeCuts::Window>(m, "HyCalTimeWindow")
+        .def_readonly("lo", &prad2::HyCalTimeCuts::Window::lo)
+        .def_readonly("hi", &prad2::HyCalTimeCuts::Window::hi)
+        .def("__repr__", [](const prad2::HyCalTimeCuts::Window &w) {
+            return "<HyCalTimeWindow lo=" + std::to_string(w.lo)
+                 + " hi=" + std::to_string(w.hi) + ">";
+        });
+
+    py::class_<prad2::HyCalTimeCuts>(m, "HyCalTimeCuts",
+        "Per-module HyCal peak-time window.  Read off Pipeline.hycal_time_cuts.")
+        .def(py::init<>())
+        .def_readonly("default_lo",  &prad2::HyCalTimeCuts::default_lo)
+        .def_readonly("default_hi",  &prad2::HyCalTimeCuts::default_hi)
+        .def_readonly("n_overrides", &prad2::HyCalTimeCuts::n_overrides)
+        .def("at",        &prad2::HyCalTimeCuts::at,        py::arg("module_index"))
+        .def("in_window", &prad2::HyCalTimeCuts::in_window,
+             py::arg("module_index"), py::arg("t"));
 
     // Pipeline — result bundle.  Owned by Python.  HyCalSystem and GemSystem
     // are exposed by reference (their lifetime is tied to Pipeline) so the
@@ -988,6 +1011,9 @@ static void bind_pipeline(py::module_ &m)
         .def_readonly("gem",                &prad2::Pipeline::gem,
                       py::return_value_policy::reference_internal)
         .def_readonly("hycal_cluster_cfg",  &prad2::Pipeline::hycal_cluster_cfg)
+        .def_readonly("hycal_time_cuts",    &prad2::Pipeline::hycal_time_cuts,
+                      py::return_value_policy::reference_internal,
+                      "Per-module HyCal peak-time window (sized to hycal.module_count()).")
         .def_readonly("hycal_transform",    &prad2::Pipeline::hycal_transform,
                       py::return_value_policy::reference_internal)
         .def_property_readonly("gem_transforms",
@@ -1017,8 +1043,9 @@ static void bind_pipeline(py::module_ &m)
         .def_readonly("runinfo_path",       &prad2::Pipeline::runinfo_path)
         .def_readonly("hycal_map_path",     &prad2::Pipeline::hycal_map_path)
         .def_readonly("gem_map_path",       &prad2::Pipeline::gem_map_path)
-        .def_readonly("hycal_calib_path",   &prad2::Pipeline::hycal_calib_path)
-        .def_readonly("gem_pedestal_path",  &prad2::Pipeline::gem_pedestal_path)
+        .def_readonly("hycal_calib_path",     &prad2::Pipeline::hycal_calib_path)
+        .def_readonly("hycal_time_cut_path",  &prad2::Pipeline::hycal_time_cut_path)
+        .def_readonly("gem_pedestal_path",    &prad2::Pipeline::gem_pedestal_path)
         .def_readonly("gem_common_mode_path", &prad2::Pipeline::gem_common_mode_path);
 
     // PipelineBuilder — fluent setters return *this so calls chain.
@@ -1043,6 +1070,8 @@ static void bind_pipeline(py::module_ &m)
         .def("set_gem_map",          &prad2::PipelineBuilder::set_gem_map,
              py::arg("path"), py::return_value_policy::reference_internal)
         .def("set_hycal_calib",      &prad2::PipelineBuilder::set_hycal_calib,
+             py::arg("path"), py::return_value_policy::reference_internal)
+        .def("set_hycal_time_cut",   &prad2::PipelineBuilder::set_hycal_time_cut,
              py::arg("path"), py::return_value_policy::reference_internal)
         .def("set_gem_pedestal",     &prad2::PipelineBuilder::set_gem_pedestal,
              py::arg("path"), py::return_value_policy::reference_internal)

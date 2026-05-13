@@ -79,7 +79,7 @@ int main(int argc, char *argv[])
     // --- load detector geometry config from JSON ---
     std::string run_str = get_run_str(root_files[0]);
     int run_num = get_run_int(root_files[0]);
-    gRunConfig = LoadRunConfig(dbDir + "/runinfo/2p1_general.json", run_num);
+    gRunConfig = LoadRunConfig(dbDir + "/runinfo/general.json", run_num);
 
     // --- init detector system ---
     fdec::HyCalSystem hycal;
