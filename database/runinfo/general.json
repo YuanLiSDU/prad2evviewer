@@ -48,11 +48,11 @@
         {
             "from_run":    24185,
             "beam_energy": 3488.43,
-            "calibration": {"file": "calibration/calibration_factor_3p5.json"},
+            "calibration": {"file": "calibration/calibration_factor_3p5_5by5.json"},
             "time_cuts":   {"hc_time_window": [130.0, 200.0]},
             "gain_factor": {
                 "data_dir": "/home/clasrun/prad2_daq/gain_monitoring/gain_monitor_output",
-                "ref_run":  24200
+                "ref_run":  24512
             }
         },
         {
