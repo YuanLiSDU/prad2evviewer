@@ -33,6 +33,8 @@
 #include <regex>
 #include <string>
 
+#include <TROOT.h>
+
 namespace prad2 {
 
 // Single module's three gain factors (g1, g2, g3 from the LMS/alpha fit).
@@ -240,6 +242,133 @@ inline GainCorrTable ComputeGainCorrection(const std::string &dir,
     auto cur_tbl = LoadGainFactors(dir, cur_run);
     auto ref_tbl = LoadGainFactors(dir, ref_run);
     return ComputeGainCorrection(ref_tbl, cur_tbl);
+}
+
+//reuse the code in gain_fitter.cpp
+struct FitResult{
+    float mean     = 0.;
+    float sigma    = 0.;
+    float chi2pndf = 0.;
+};
+
+inline FitResult gain_hist_fitter(TH1F* h, const float & fac)
+{
+    FitResult result;
+
+    if (!h) {
+        return result;
+    }
+
+    const int nBins = h->GetNbinsX();
+    if (nBins <= 0) {
+        return result;
+    }
+
+    const int maxBin = h->GetMaximumBin();
+    const double maxContent = h->GetBinContent(maxBin);
+
+    if (maxContent <= 0.) {
+        return result;
+    }
+
+    const double threshold = fac * maxContent;
+
+    int leftBin  = maxBin;
+    int rightBin = maxBin;
+
+    // Find first bin to the left below 10% of max
+    for (int ibin = maxBin; ibin >= 1; --ibin) {
+        if (h->GetBinContent(ibin) < threshold) {
+            leftBin = ibin;
+            break;
+        }
+        if (ibin == 1) {
+            leftBin = 1;
+        }
+    }
+
+    // Find first bin to the right below 10% of max
+    for (int ibin = maxBin; ibin <= nBins; ++ibin) {
+        if (h->GetBinContent(ibin) < threshold) {
+            rightBin = ibin;
+            break;
+        }
+        if (ibin == nBins) {
+            rightBin = nBins;
+        }
+    }
+
+    // Optional: if you want the fit range to stay inside the above-threshold region,
+    // shift inward by one bin when the threshold-crossing bin itself is below threshold.
+    if (leftBin < maxBin && h->GetBinContent(leftBin) < threshold) {
+        leftBin++;
+    }
+    if (rightBin > maxBin && h->GetBinContent(rightBin) < threshold) {
+        rightBin--;
+    }
+
+    // Ensure at least 5 bins around the maximum are included so that a
+    // 3-parameter Gaussian fit is always well-constrained, even when the
+    // peak is very narrow (only a few filled bins).
+    if (leftBin  > maxBin - 2) leftBin  = maxBin - 2;
+    if (rightBin < maxBin + 2) rightBin = maxBin + 2;
+
+    // Safety check
+    if (leftBin < 1) leftBin = 1;
+    if (rightBin > nBins) rightBin = nBins;
+    if (leftBin >= rightBin) {
+        return result;
+    }
+    
+    const double xLow  = h->GetXaxis()->GetBinLowEdge(leftBin);
+    const double xHigh = h->GetXaxis()->GetBinUpEdge(rightBin);
+
+    const double peakX = h->GetXaxis()->GetBinCenter(maxBin);
+
+    // A reasonable initial sigma guess from fit window width
+    double sigmaGuess = 0.5 * (xHigh - xLow) / 2.0;
+    if (sigmaGuess <= 0.) {
+        sigmaGuess = h->GetRMS();
+    }
+    if (sigmaGuess <= 0.) {
+        sigmaGuess = h->GetBinWidth(maxBin);
+    }
+
+    std::string fitName = std::string(h->GetName()) + "_gaus_fit";
+    TF1 * gausFit = new TF1(fitName.c_str(), "gaus", xLow, xHigh);
+    gausFit->SetParameters(maxContent, peakX, sigmaGuess);
+
+    // R = fit in function range, Q = quiet, N = do not store function in histogram
+    // "N" is required to avoid double-ownership: new TF1 is registered in gROOT's
+    // global list; without "N", Fit() also stores it in the histogram's list,
+    // causing a double-free during ROOT cleanup at program exit.
+    int fitStatus = h->Fit(gausFit, "RQN");
+
+    if (fitStatus != 0) {
+        delete gausFit;
+        return result;
+    }
+
+    const float mean  = static_cast<float>(gausFit->GetParameter(1));
+    const float sigma = static_cast<float>(gausFit->GetParameter(2));
+    if (!std::isfinite(mean) || !std::isfinite(sigma) || sigma <= 0.f) {
+        delete gausFit;
+        return result;
+    }
+    result.mean  = mean;
+    result.sigma = sigma;
+
+    const double ndf = gausFit->GetNDF();
+    if (ndf > 0) {
+        result.chi2pndf = static_cast<float>(gausFit->GetChisquare() / ndf);
+    }
+
+    // Transfer ownership from gROOT's global list to the histogram so the fit
+    // curve is saved in the output file and there is only one owner (no double-free).
+    gROOT->GetListOfFunctions()->Remove(gausFit);
+    h->GetListOfFunctions()->Add(gausFit);
+
+    return result;
 }
 
 } // namespace prad2
