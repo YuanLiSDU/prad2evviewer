@@ -61,18 +61,11 @@ struct RefGainTable {
     bool loaded     = false;
 };
 
-// Returns the path to the best-matching gain factor file for run_num.
-// Selection rule:
-//   run_num >= 0 -> file whose run number is the largest that is <= run_num;
-//                   if no such file exists, falls back to the nearest available file.
-//   run_num <  0 -> file with the largest run number ("latest")
-// Returns an empty string if the directory is empty or inaccessible.
+// Returns the path to the gain factor file whose run number exactly matches run_num.
+// Returns an empty string if no matching file is found or the directory is inaccessible.
 inline std::string FindRefGainFile(const std::string &dir, int run_num)
 {
     const std::regex pat(R"(prad_(\d{6})_LMS\.dat)");
-
-    int         best_run  = -1;
-    std::string best_path;
 
     std::error_code ec;
     for (auto &entry : std::filesystem::directory_iterator(dir, ec)) {
@@ -81,18 +74,14 @@ inline std::string FindRefGainFile(const std::string &dir, int run_num)
         std::string fname = entry.path().filename().string();
         if (!std::regex_match(fname, m, pat)) continue;
 
-        int rn = std::stoi(m[1].str());
-        if (run_num < 0) {
-            if (rn > best_run) { best_run = rn; best_path = entry.path().string(); }
-        } else if (rn <= run_num && rn > best_run) {
-            best_run = rn; best_path = entry.path().string();
-        }
+        if (std::stoi(m[1].str()) == run_num)
+            return entry.path().string();
     }
     if (ec)
         std::cerr << "Warning: cannot iterate gain_factor dir " << dir
                   << ": " << ec.message() << "\n";
 
-    return best_path;
+    return {};
 }
 
 // Load reference gain factors for the given run number.
@@ -184,9 +173,6 @@ inline std::string FindGainCorrRootFile(const std::string &dir, int run_num)
 {
     const std::regex pat(R"(prad_(\d{6})_gain_corr\.root)");
 
-    int         best_run  = -1;
-    std::string best_path;
-
     std::error_code ec;
     for (auto &entry : std::filesystem::directory_iterator(dir, ec)) {
         if (!entry.is_regular_file()) continue;
@@ -194,18 +180,14 @@ inline std::string FindGainCorrRootFile(const std::string &dir, int run_num)
         std::string fname = entry.path().filename().string();
         if (!std::regex_match(fname, m, pat)) continue;
 
-        int rn = std::stoi(m[1].str());
-        if (run_num < 0) {
-            if (rn > best_run) { best_run = rn; best_path = entry.path().string(); }
-        } else if (rn <= run_num && rn > best_run) {
-            best_run = rn; best_path = entry.path().string();
-        }
+        if (std::stoi(m[1].str()) == run_num)
+            return entry.path().string();
     }
     if (ec)
         std::cerr << "Warning: cannot iterate gain_correction dir " << dir
                   << ": " << ec.message() << "\n";
 
-    return best_path;
+    return {};
 }
 
 // A time series of gain correction tables loaded from a replay_gainCorr ROOT
