@@ -61,6 +61,16 @@
             "// — chained inheritance fills in the rest.":                     "",
             "from_run":    24551,
             "beam_energy": 728.9
+        },
+        {
+            "from_run":    24670,
+            "beam_energy": 3488.43,
+            "calibration": {"file": "calibration/calibration_factor_3p5_5by5.json"},
+            "time_cuts":   {"hc_time_window": [130.0, 200.0]},
+            "gain_factor": {
+                "data_dir": "",
+                "ref_run":  24512
+            }
         }
     ],
 
