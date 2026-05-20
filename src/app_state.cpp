@@ -1143,8 +1143,11 @@ nlohmann::json AppState::apiGemOccupancy() const
     return result;
 }
 
-nlohmann::json AppState::apiGemApv(const ssp::SspEventData &ssp_evt, int evnum) const
+nlohmann::json AppState::apiGemApv(const ssp::SspEventData &ssp_evt, int evnum,
+                                   bool skip_sw_zs,
+                                   bool *any_full_readout) const
 {
+    if (any_full_readout) *any_full_readout = false;
     json result = json::object();
     result["enabled"] = gem_enabled;
     result["event"]   = evnum;
@@ -1186,6 +1189,7 @@ nlohmann::json AppState::apiGemApv(const ssp::SspEventData &ssp_evt, int evnum) 
     //   fw_hits[128]       — firmware survivor (pre-software-cut), 0/1
     //   cm[6] | null       — firmware online common mode per time sample
     //   no_hit_fr          — firmware full-readout (nstrips==128) but no survivors
+    //   full_readout       — firmware sent all 128 channels (nstrips==128)
     //   present            — APV showed up in this event's SSP data
     // Per-APV pedestal noise lives on /api/gem/calib (one-shot, cached
     // by the frontend until calib_rev changes).
@@ -1199,6 +1203,11 @@ nlohmann::json AppState::apiGemApv(const ssp::SspEventData &ssp_evt, int evnum) 
 
         const ssp::ApvData *raw = ssp_evt.findApv(cfg.crate_id, cfg.mpd_id, cfg.adc_ch);
         bool present = (raw != nullptr) && raw->present;
+        // Firmware full-readout: every channel present in the SSP stream.
+        // Used by the "Latest full-readout" mode to single out the
+        // prescaled monitoring events that bypass online ZS.
+        bool full_readout = present && raw->nstrips >= N_STRIPS;
+        if (full_readout && any_full_readout) *any_full_readout = true;
 
         json raw_arr = json::array();
         json proc_arr = json::array();
@@ -1221,7 +1230,12 @@ nlohmann::json AppState::apiGemApv(const ssp::SspEventData &ssp_evt, int evnum) 
             }
             raw_arr.push_back(std::move(raw_row));
             proc_arr.push_back(std::move(proc_row));
-            bool hit = present && gem_sys.IsChannelHit(i, s);
+            // In snapshot (skip_sw_zs) mode, every channel of a full-readout
+            // APV is marked as a hit so the client's signal-only filter
+            // doesn't hide it.  Firmware-ZS'd APVs keep their normal mask
+            // (mixed events are rare in practice but handled correctly).
+            bool sw_hit = present && gem_sys.IsChannelHit(i, s);
+            bool hit = (skip_sw_zs && full_readout) ? true : sw_hit;
             if (hit) any_hit = true;
             hit_arr.push_back(hit ? 1 : 0);
             fw_hit_arr.push_back(present && raw->hasStrip(s) ? 1 : 0);
@@ -1246,24 +1260,30 @@ nlohmann::json AppState::apiGemApv(const ssp::SspEventData &ssp_evt, int evnum) 
 
         // Firmware full-readout warning: APV reported every strip but none
         // survived ZS.  Mirrors the gem_event_viewer.py "no hits" badge.
-        bool no_hit_fr = present && raw->nstrips >= N_STRIPS && !any_hit;
+        // any_hit here reflects the (possibly overridden) hits[] mask, so
+        // in snapshot mode a full-readout APV with no real survivors will
+        // still report no_hit_fr=false — which is exactly what the operator
+        // wants (the badge is for diagnosing "where did the hits go?",
+        // which is moot when we explicitly disabled the cut).
+        bool no_hit_fr = full_readout && !any_hit;
 
         apvs.push_back({
-            {"id",         i},
-            {"det_id",     cfg.det_id},
-            {"det_name",   det_name},
-            {"plane",      plane},
-            {"det_pos",    cfg.det_pos},
-            {"crate",      cfg.crate_id},
-            {"mpd",        cfg.mpd_id},
-            {"adc",        cfg.adc_ch},
-            {"present",    present},
-            {"no_hit_fr",  no_hit_fr},
-            {"raw",        std::move(raw_arr)},
-            {"processed",  std::move(proc_arr)},
-            {"hits",       std::move(hit_arr)},
-            {"fw_hits",    std::move(fw_hit_arr)},
-            {"cm",         std::move(cm_val)},
+            {"id",            i},
+            {"det_id",        cfg.det_id},
+            {"det_name",      det_name},
+            {"plane",         plane},
+            {"det_pos",       cfg.det_pos},
+            {"crate",         cfg.crate_id},
+            {"mpd",           cfg.mpd_id},
+            {"adc",           cfg.adc_ch},
+            {"present",       present},
+            {"no_hit_fr",     no_hit_fr},
+            {"full_readout",  full_readout},
+            {"raw",           std::move(raw_arr)},
+            {"processed",     std::move(proc_arr)},
+            {"hits",          std::move(hit_arr)},
+            {"fw_hits",       std::move(fw_hit_arr)},
+            {"cm",            std::move(cm_val)},
         });
     }
     result["apvs"] = apvs;

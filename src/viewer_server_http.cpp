@@ -1131,6 +1131,34 @@ void ViewerServer::onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         return;
     }
 
+    // --- gem/apv/latest_full (most recent monitoring event snapshot) ---
+    // Holds the JSON of the last event where any APV came in firmware
+    // full-readout (nstrips==128).  Encoded by the ET reader with
+    // skip_sw_zs=true so the entire pedestal/noise spectrum is visible
+    // across all 128 channels regardless of the software σ cut.  Updated
+    // on the prescaled DAQ monitoring events; clients learn about updates
+    // through the gem_apv_full_event WS broadcast.  Returns an error blob
+    // when no full-readout event has been captured yet (typical right
+    // after startup or in file mode, where the ET reader doesn't run).
+    if (uri == "/api/gem/apv/latest_full") {
+#ifdef WITH_ET
+        std::string body, gz;
+        {
+            std::lock_guard<std::mutex> lk(latest_full_apv_mtx_);
+            body = latest_full_apv_json_;
+            gz   = latest_full_apv_gz_;
+        }
+        if (body.empty()) {
+            reply("{\"error\":\"no full-readout event yet\"}");
+        } else {
+            reply(body, "application/json", gz.empty() ? nullptr : &gz);
+        }
+#else
+        reply("{\"error\":\"online mode disabled\"}");
+#endif
+        return;
+    }
+
     // --- gem/apv/<n> (per-event GEM APV waveforms, mode-dependent) ---
     // Online: served from a per-ring-entry pre-encoded string so older
     // events don't disturb the live gem_sys state.

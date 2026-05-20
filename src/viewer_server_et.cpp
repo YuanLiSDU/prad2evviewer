@@ -381,9 +381,14 @@ void ViewerServer::etReaderThread()
                         // for older ring events doesn't need to re-process
                         // gem_sys (which would clobber the live state used
                         // by /api/gem/hits etc.).  gem_sys was just filled
-                        // by processGemEvent above for this event.
+                        // by processGemEvent above for this event.  The
+                        // out-param flags whether any APV came in full-
+                        // readout, so we can encode the snapshot variant
+                        // below only when there's actually a monitoring
+                        // event to capture (rare; prescaled by the DAQ).
+                        bool any_full_readout = false;
                         std::string gemapvjson = app_online_.gem_enabled
-                            ? app_online_.apiGemApv(ssp_evt, seq).dump()
+                            ? app_online_.apiGemApv(ssp_evt, seq, false, &any_full_readout).dump()
                             : std::string("{\"enabled\":false}");
                         // Pre-compress the gem_apv payload once here so
                         // every viewer's HTTP fetch serves the cached
@@ -419,6 +424,34 @@ void ViewerServer::etReaderThread()
 
                         wsBroadcast("{\"type\":\"new_event\",\"seq\":" +
                                     std::to_string(seq) + "}");
+
+                        // Latest full-readout snapshot — second encode with
+                        // skip_sw_zs=true so the client sees every channel
+                        // of every full-readout APV (signal-only filter
+                        // becomes a no-op for them).  Only runs on the
+                        // prescaled monitoring events flagged by the first
+                        // call's any_full_readout, so the regular event
+                        // path keeps the same single-encode cost.
+                        if (any_full_readout && app_online_.gem_enabled) {
+                            std::string fulljson =
+                                app_online_.apiGemApv(ssp_evt, seq, true, nullptr).dump();
+                            std::string fullgz;
+                            if (fulljson.size() >= prad2::kGzipMinBytes) {
+                                try {
+                                    fullgz = prad2::gzip_compress(fulljson);
+                                } catch (...) {
+                                    fullgz.clear();
+                                }
+                            }
+                            {
+                                std::lock_guard<std::mutex> lk(latest_full_apv_mtx_);
+                                latest_full_apv_seq_  = seq;
+                                latest_full_apv_json_ = std::move(fulljson);
+                                latest_full_apv_gz_   = std::move(fullgz);
+                            }
+                            wsBroadcast("{\"type\":\"gem_apv_full_event\",\"seq\":" +
+                                        std::to_string(seq) + "}");
+                        }
                     }
                 }
             }

@@ -267,6 +267,14 @@ function connectWebSocket() {
                     syncGemApvZsSigmaInput(msg.zs_sigma);
                 if (typeof gemApvCalib !== 'undefined' && gemApvCalib)
                     gemApvCalib.zs_sigma = msg.zs_sigma;
+            } else if (msg.type === 'gem_apv_full_event') {
+                // Server captured a new "monitoring event" — one where the
+                // firmware bypassed online ZS, so every channel of every
+                // APV was read out.  Only the gem_apv tab in 'Latest full-
+                // readout' source cares; gemApvOnLiveEvent gates by source
+                // and pause state.  No-op for current-event viewers.
+                if (typeof gemApvOnLiveEvent === 'function' && activeTab === 'gem_apv')
+                    gemApvOnLiveEvent(msg.seq || 0, 'full_event');
             }
         } catch (e) {}
     };

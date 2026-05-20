@@ -75,6 +75,18 @@ function hsv2rgb(h, s, v) {
     return `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
 }
 
+// localStorage helpers for tab preferences — mirror theme.js's pattern.
+// Wrapped in try/catch so private-mode browsers don't TDZ the tab.
+function gemApvPrefGet(key, dflt) {
+    try {
+        const v = localStorage.getItem('prad2.gem_apv.' + key);
+        return v === null ? dflt : v;
+    } catch (e) { return dflt; }
+}
+function gemApvPrefSet(key, v) {
+    try { localStorage.setItem('prad2.gem_apv.' + key, String(v)); } catch (e) {}
+}
+
 // Tab state.
 let gemApvData = null;          // last fetched per-event payload
 let gemApvCurrentEvent = -1;
@@ -94,6 +106,27 @@ let gemApvSampleMask = [true, true, true, true, true, true];
 // GEMs).  Out-of-range det_ids fall back to "show" so unexpected
 // configurations don't disappear silently.
 let gemApvDetMask = [true, true, true, true];
+
+// Layout — 'overlay' (default; 6 TS stacked on the same channel axis) or
+// 'sequential' (prad1 style; 128×6 = 768 points laid out in time order).
+let gemApvLayout = gemApvPrefGet('layout', 'overlay');
+// Source — 'current' (default; follows the live stream) or 'full' (locks
+// onto the most recent full-readout monitoring event, served from a
+// separate server-side snapshot via /api/gem/apv/latest_full).
+let gemApvSource = gemApvPrefGet('source', 'current');
+// Normalize — older builds or a corrupted localStorage entry could leave
+// these as anything; an unknown gemApvSource value would silently freeze
+// the WS gate (both 'event' and 'full_event' branches would return).
+if (gemApvLayout !== 'overlay' && gemApvLayout !== 'sequential') gemApvLayout = 'overlay';
+if (gemApvSource !== 'current' && gemApvSource !== 'full')       gemApvSource = 'current';
+// Pause — freezes auto-refresh on this tab.  WS new_event /
+// gem_apv_full_event notifications skip the refetch while true; explicit
+// user actions (σ change, navigation, source/layout change) still refresh.
+let gemApvPaused = gemApvPrefGet('paused', '0') === '1';
+// Staleness counter — bumped on every WS new_event we ignore while
+// paused, displayed in the status line so the operator knows how far
+// behind the live stream they are.
+let gemApvSkippedSincePause = 0;
 function gemApvDetVisible(detId) {
     if (detId < 0 || detId >= gemApvDetMask.length) return true;
     return gemApvDetMask[detId];
@@ -113,6 +146,34 @@ const GEM_APV_HIT_BLOCK_H = 2 * GEM_APV_HIT_ROW_H + 1;
 // Fetch + section build
 // =====================================================================
 
+// Apply a successfully-fetched APV payload: cache it, sync σ input, rebuild
+// section skeleton if needed, refresh calib on rev mismatch, then redraw.
+// Shared by per-event fetch and latest-full snapshot fetch so both paths
+// stay consistent on calib_rev handling and σ display.
+function applyGemApvData(data) {
+    gemApvData = data;
+    // Pull the event from the payload — the server stamps it and it's the
+    // single source of truth for "what is being displayed" (in 'full' mode
+    // this is the snapshot's seq, not the live currentEvent).
+    gemApvCurrentEvent = (typeof data.event === 'number') ? data.event : -1;
+    // Reflect the encode-time σ in the toolbar input so all viewers stay
+    // in sync without firing a fresh POST.
+    syncGemApvZsSigmaInput(data.zs_sigma);
+    buildGemApvSections();
+    // Load (or refresh) calibration on rev mismatch — the threshold band
+    // needs noise, which lives on /api/gem/calib.  Explicit type check so
+    // rev=0 isn't mis-read as "missing".
+    const haveRev = (gemApvCalib && typeof gemApvCalib.rev === 'number')
+        ? gemApvCalib.rev : null;
+    const dataRev = (typeof data.calib_rev === 'number')
+        ? data.calib_rev : null;
+    if (dataRev !== null && dataRev !== haveRev) {
+        ensureGemApvCalib(true /*force*/).then(renderGemApvPanels);
+    } else {
+        renderGemApvPanels();
+    }
+}
+
 function fetchGemApvData(evnum) {
     if (typeof evnum !== 'number' || evnum <= 0) return Promise.resolve();
     return fetch(`/api/gem/apv/${evnum}`)
@@ -121,30 +182,63 @@ function fetchGemApvData(evnum) {
             return r.json();
         })
         .then(data => {
-            if (data.error) {
-                gemApvSetStatus(data.error);
-                return;
-            }
-            gemApvData = data;
-            gemApvCurrentEvent = evnum;
-            // Reflect the encode-time σ in the toolbar input so all
-            // viewers stay in sync without firing a fresh POST.
-            syncGemApvZsSigmaInput(data.zs_sigma);
-            buildGemApvSections();
-            // Load (or refresh) calibration on rev mismatch — the
-            // threshold band needs noise, which lives on /api/gem/calib.
-            // Explicit type check so rev=0 isn't mis-read as "missing".
-            const haveRev = (gemApvCalib && typeof gemApvCalib.rev === 'number')
-                ? gemApvCalib.rev : null;
-            const dataRev = (typeof data.calib_rev === 'number')
-                ? data.calib_rev : null;
-            if (dataRev !== null && dataRev !== haveRev) {
-                ensureGemApvCalib(true /*force*/).then(renderGemApvPanels);
-            } else {
-                renderGemApvPanels();
-            }
+            if (data.error) { gemApvSetStatus(data.error); return; }
+            applyGemApvData(data);
         })
         .catch(err => gemApvSetStatus('Fetch error: ' + err));
+}
+
+// Fetch the server's "latest full-readout" snapshot — the most recent
+// monitoring event where firmware ZS was bypassed (so the entire pedestal
+// spectrum is visible across all 128 channels per APV).  The server stamps
+// the payload with the snapshot's event seq, which applyGemApvData picks up.
+function fetchGemApvLatestFull() {
+    return fetch('/api/gem/apv/latest_full')
+        .then(r => {
+            if (!r.ok) throw new Error('http ' + r.status);
+            return r.json();
+        })
+        .then(data => {
+            if (data.error) { gemApvSetStatus(data.error); return; }
+            applyGemApvData(data);
+        })
+        .catch(err => gemApvSetStatus('Fetch error: ' + err));
+}
+
+// Entry point for the source-aware refresh used by tab-activation,
+// source-change, layout-change, and explicit user re-fetch requests.  In
+// 'current' mode it follows the live event the rest of the viewer is
+// looking at; in 'full' mode it loads the latest server snapshot.  This is
+// the bypass path for the pause gate — explicit user actions always run
+// through here regardless of gemApvPaused.
+function refreshGemApv(currentEventNum) {
+    if (gemApvSource === 'full') {
+        return fetchGemApvLatestFull();
+    }
+    return fetchGemApvData(currentEventNum);
+}
+
+// Called from online.js's WS handler when the server reports a new event
+// (current mode) or a new full-readout event (full mode), and from
+// loadEventData on every event swap.  Honours the pause gate when the
+// caller signals an auto-refresh; user-initiated navigation (file-mode
+// arrow keys / prev-next, online ring-buffer nav) passes manual=true so
+// the operator's deliberate "show me this event" still goes through.
+// 'full_event' always comes from the WS push and is never manual.
+// Pre-update viewers without this function defined fall back to the
+// existing direct fetchGemApvData call in viewer.js.
+function gemApvOnLiveEvent(evnum, kind /* 'event' | 'full_event' */, manual) {
+    if (kind === 'full_event' && gemApvSource !== 'full') return;
+    if (kind === 'event'      && gemApvSource !== 'current') return;
+    if (gemApvPaused && !manual) {
+        gemApvSkippedSincePause++;
+        // Cheap status refresh so the operator sees the staleness counter
+        // tick even while traces are frozen.
+        renderGemApvPanels();
+        return;
+    }
+    if (kind === 'full_event') fetchGemApvLatestFull();
+    else                       fetchGemApvData(evnum);
 }
 
 // Fetch /api/gem/calib once and cache.  Pass force=true to bypass the
@@ -350,8 +444,13 @@ function renderGemApvPanels() {
     }
 
     const mode = gemApvShowProcessed ? 'processed' : 'raw';
+    const layoutLbl = (gemApvLayout === 'sequential') ? ' seq' : '';
+    const srcLbl = (gemApvSource === 'full') ? ' full' : '';
     const evlbl = gemApvCurrentEvent > 0 ? `evt ${gemApvCurrentEvent}` : '';
-    gemApvSetStatus(`${shown}/${total} APVs  [${mode}]  ${evlbl}`);
+    const pauseLbl = gemApvPaused
+        ? `  PAUSED${gemApvSkippedSincePause ? ` (skipped ${gemApvSkippedSincePause})` : ''}`
+        : '';
+    gemApvSetStatus(`${shown}/${total} APVs  [${mode}${layoutLbl}${srcLbl}]  ${evlbl}${pauseLbl}`);
 }
 
 function apvHasSignal(apv) {
@@ -491,6 +590,24 @@ function drawApvCanvas(canvas, apv, field, sharedRange) {
         ctx.setLineDash([]);
     }
 
+    // X-axis mapper — abstracts overlay vs sequential so threshold band,
+    // traces, CM overlay and hit ticks all stay aligned.
+    //   overlay:    x depends only on channel (all 6 TS share an axis)
+    //   sequential: x = (ts * nStrips + ch) — channel-major within each TS
+    //               block, TS-major across blocks (prad1 style)
+    const N_TS = 6;
+    const nStrips = 128;
+    const seq = (gemApvLayout === 'sequential');
+    const xSlotsOverlay    = nStrips;
+    const xSlotsSequential = nStrips * N_TS;
+    const xSlots = seq ? xSlotsSequential : xSlotsOverlay;
+    const stepX  = plotW / Math.max(xSlots - 1, 1);
+    const xAt = (ch, ts) => plotX + (seq ? (ts * nStrips + ch) : ch) * stepX;
+    // List of TS blocks the per-TS overlays (threshold band, hit ticks)
+    // should iterate over — only 6 in sequential layout, just [0] in overlay
+    // (where one band/hit-row covers the shared axis).
+    const tsBlocks = seq ? [0,1,2,3,4,5] : [0];
+
     // Threshold band: ±noise[ch]·zs_sigma, dashed grey, drawn before the
     // data traces so traces sit on top.  noise[] comes from the cached
     // /api/gem/calib payload; zs_sigma is per-event so the band always
@@ -499,37 +616,34 @@ function drawApvCanvas(canvas, apv, field, sharedRange) {
     const zsSigma = (gemApvData && gemApvData.zs_sigma) || 0;
     const noise = (gemApvCalib && gemApvCalib.noise) ? gemApvCalib.noise.get(apv.id) : null;
     if (gemApvShowThreshold && gemApvShowProcessed && noise && zsSigma > 0) {
-        const nStrips = Math.min(128, noise.length);
-        const stepX = plotW / Math.max(nStrips - 1, 1);
+        const noiseN = Math.min(nStrips, noise.length);
         ctx.strokeStyle = THEME && THEME.textDim ? THEME.textDim : '#888';
         ctx.lineWidth = 0.8;
         ctx.setLineDash([4, 3]);
-        const drawBand = (sign) => {
+        const drawBand = (sign, t) => {
             ctx.beginPath();
-            for (let s = 0; s < nStrips; s++) {
-                const x = plotX + s * stepX;
+            for (let s = 0; s < noiseN; s++) {
+                const x = xAt(s, t);
                 const y = toY(sign * noise[s] * zsSigma);
                 if (s === 0) ctx.moveTo(x, y);
                 else         ctx.lineTo(x, y);
             }
             ctx.stroke();
         };
-        drawBand(+1);
-        drawBand(-1);
+        for (const t of tsBlocks) { drawBand(+1, t); drawBand(-1, t); }
         ctx.setLineDash([]);
     }
 
     // Time-sample traces.
     if (frame && frame.length > 0) {
-        const nStrips = Math.min(128, frame.length);
-        const stepX = plotW / Math.max(nStrips - 1, 1);
+        const nS = Math.min(nStrips, frame.length);
         ctx.lineWidth = 0.9;
-        for (let t = 0; t < 6; t++) {
+        for (let t = 0; t < N_TS; t++) {
             if (!gemApvSampleMask[t]) continue;
             ctx.strokeStyle = GEM_APV_TS_COLORS[t];
             ctx.beginPath();
-            for (let s = 0; s < nStrips; s++) {
-                const x = plotX + s * stepX;
+            for (let s = 0; s < nS; s++) {
+                const x = xAt(s, t);
                 const y = toY(frame[s][t]);
                 if (s === 0) ctx.moveTo(x, y);
                 else         ctx.lineTo(x, y);
@@ -538,22 +652,46 @@ function drawApvCanvas(canvas, apv, field, sharedRange) {
         }
     }
 
+    // Sequential dividers — thin dashed vertical lines between TS blocks.
+    // Drawn after traces so they're visible on top, but kept dim so they
+    // read as separators rather than data.
+    if (seq) {
+        ctx.strokeStyle = THEME && THEME.textDim ? THEME.textDim : '#888';
+        ctx.lineWidth = 0.4;
+        ctx.setLineDash([1, 3]);
+        for (let t = 1; t < N_TS; t++) {
+            const x = xAt(0, t);
+            ctx.beginPath();
+            ctx.moveTo(x, plotY);
+            ctx.lineTo(x, plotY + plotH);
+            ctx.stroke();
+        }
+        ctx.setLineDash([]);
+    }
+
     // CM overlay: one horizontal dashed line per enabled time sample,
     // colour-matched (desaturated) with the trace so reader can pair
     // firmware CM with the same-colour strip waveform.  Drawn AFTER the
     // traces so it sits on top.  Skipped in Process mode (raw ADC values
     // would land off the pedestal-subtracted axis) and when the firmware
-    // didn't emit type-0xD debug-header words (apv.cm == null).
+    // didn't emit type-0xD debug-header words (apv.cm == null).  In
+    // sequential layout each line is constrained to its TS block so the
+    // CM value lines up under the matching colour-coded trace block.
     if (gemApvShowCm && !gemApvShowProcessed && Array.isArray(apv.cm)) {
         ctx.lineWidth = 1.4;
         ctx.setLineDash([5, 3]);
-        for (let t = 0; t < apv.cm.length && t < 6; t++) {
+        for (let t = 0; t < apv.cm.length && t < N_TS; t++) {
             if (!gemApvSampleMask[t]) continue;
             ctx.strokeStyle = GEM_APV_CM_COLORS[t];
-            ctx.beginPath();
             const y = toY(apv.cm[t]);
-            ctx.moveTo(plotX, y);
-            ctx.lineTo(plotX + plotW, y);
+            ctx.beginPath();
+            if (seq) {
+                ctx.moveTo(xAt(0, t), y);
+                ctx.lineTo(xAt(nStrips - 1, t), y);
+            } else {
+                ctx.moveTo(plotX, y);
+                ctx.lineTo(plotX + plotW, y);
+            }
             ctx.stroke();
         }
         ctx.setLineDash([]);
@@ -562,32 +700,35 @@ function drawApvCanvas(canvas, apv, field, sharedRange) {
     // Hit tick rows — bottom row = software-cut survivors (bright accent),
     // top row = firmware survivors (dim, gated by FW Hits checkbox).
     // Both rows reserved at all times so toggling FW Hits doesn't reflow.
+    // hits[] / fw_hits[] are per-channel only (no TS dimension); in
+    // sequential layout we repeat the same per-channel tick pattern under
+    // each TS block so traces and ticks stay column-aligned.
     const swRowY = H - hitH - 2;
     const fwRowY = swRowY - hitH - 1;
     const accent = (THEME && THEME.accent) ? THEME.accent : '#ffd166';
-    const stepXh = (apv.hits && apv.hits.length > 0)
-        ? plotW / Math.max(Math.min(128, apv.hits.length) - 1, 1)
-        : null;
     if (gemApvShowFwHits && Array.isArray(apv.fw_hits) && apv.fw_hits.length > 0) {
-        const nStrips = Math.min(128, apv.fw_hits.length);
-        const stepX = plotW / Math.max(nStrips - 1, 1);
+        const nS = Math.min(nStrips, apv.fw_hits.length);
         ctx.globalAlpha = 0.45;
         ctx.fillStyle = accent;
-        for (let s = 0; s < nStrips; s++) {
-            if (apv.fw_hits[s]) {
-                const x = plotX + s * stepX;
-                ctx.fillRect(x - 0.8, fwRowY, 1.6, hitH);
+        for (const t of tsBlocks) {
+            for (let s = 0; s < nS; s++) {
+                if (apv.fw_hits[s]) {
+                    const x = xAt(s, t);
+                    ctx.fillRect(x - 0.8, fwRowY, 1.6, hitH);
+                }
             }
         }
         ctx.globalAlpha = 1.0;
     }
-    if (stepXh !== null) {
-        const nStrips = Math.min(128, apv.hits.length);
+    if (Array.isArray(apv.hits) && apv.hits.length > 0) {
+        const nS = Math.min(nStrips, apv.hits.length);
         ctx.fillStyle = accent;
-        for (let s = 0; s < nStrips; s++) {
-            if (apv.hits[s]) {
-                const x = plotX + s * stepXh;
-                ctx.fillRect(x - 0.8, swRowY, 1.6, hitH);
+        for (const t of tsBlocks) {
+            for (let s = 0; s < nS; s++) {
+                if (apv.hits[s]) {
+                    const x = xAt(s, t);
+                    ctx.fillRect(x - 0.8, swRowY, 1.6, hitH);
+                }
             }
         }
     }
@@ -644,6 +785,67 @@ function setupGemApvControls() {
     cb('gem-apv-threshold',   gemApvShowThreshold);
     cb('gem-apv-cm',          gemApvShowCm);
     syncGemApvControlEnables();
+
+    // Layout select — overlay (default) vs sequential (prad1 style).
+    // Pure render-side toggle, no refetch needed.
+    const layoutEl = document.getElementById('gem-apv-layout');
+    if (layoutEl) {
+        layoutEl.value = gemApvLayout;
+        layoutEl.onchange = () => {
+            gemApvLayout = layoutEl.value;
+            gemApvPrefSet('layout', gemApvLayout);
+            renderGemApvPanels();
+        };
+    }
+
+    // Source select — 'current' follows the live stream; 'full' locks the
+    // panel onto the latest server-side full-readout snapshot.  Changing
+    // source is an explicit user action so it bypasses the pause gate and
+    // also resets the staleness counter (the "skipped N" only applies to
+    // the prior source's live feed).
+    const srcEl = document.getElementById('gem-apv-source');
+    if (srcEl) {
+        srcEl.value = gemApvSource;
+        srcEl.onchange = () => {
+            gemApvSource = srcEl.value;
+            gemApvPrefSet('source', gemApvSource);
+            gemApvSkippedSincePause = 0;
+            // Pull a fresh frame from the new source so the panel updates
+            // immediately instead of waiting for the next WS notification.
+            // currentEvent is exposed by viewer.js as a global.
+            const live = (typeof currentEvent === 'number') ? currentEvent : -1;
+            refreshGemApv(live);
+        };
+    }
+
+    // Pause button — toggles auto-refresh on this tab.  All other tabs
+    // continue updating normally; explicit user actions on this tab also
+    // bypass the pause via refreshGemApv.
+    const pauseEl = document.getElementById('gem-apv-pause');
+    if (pauseEl) {
+        const syncPauseUi = () => {
+            pauseEl.textContent = gemApvPaused ? '⏸ Paused' : '▶ Live';
+            pauseEl.classList.toggle('gem-apv-paused', gemApvPaused);
+        };
+        syncPauseUi();
+        pauseEl.onclick = () => {
+            gemApvPaused = !gemApvPaused;
+            gemApvPrefSet('paused', gemApvPaused ? '1' : '0');
+            if (!gemApvPaused) {
+                // Resume — pull the freshest frame for the active source
+                // so the panel jumps straight to "now" instead of holding
+                // the stale frame until the next WS notification.
+                gemApvSkippedSincePause = 0;
+                const live = (typeof currentEvent === 'number') ? currentEvent : -1;
+                refreshGemApv(live);
+            } else {
+                // Pausing — just refresh the status line so the "PAUSED"
+                // label appears immediately.
+                renderGemApvPanels();
+            }
+            syncPauseUi();
+        };
+    }
 
     // σ input — POST on commit (change event fires on blur / Enter / arrows).
     // The server applies to the live reconstruction; new events arriving
@@ -713,9 +915,14 @@ function postGemApvZsSigma(v) {
         .then(j => {
             if (j.error) throw new Error(j.error);
             if (gemApvCalib) gemApvCalib.zs_sigma = j.zs_sigma;
-            // Re-fetch the current event so the hits[] reflect the new σ.
-            // (The encoded ring entry for older events keeps the old σ.)
-            if (gemApvCurrentEvent > 0) fetchGemApvData(gemApvCurrentEvent);
+            // Re-fetch from the active source so the hits[] (and the
+            // threshold band's per-event zs_sigma) reflect the new σ.  In
+            // 'current' mode this hits /api/gem/apv/<displayed-event> so
+            // a paused panel keeps its frame and just rolls in the new σ
+            // instead of jumping to the live stream; in 'full' mode
+            // refreshGemApv ignores the arg and pulls the snapshot.
+            // σ changes are explicit user actions so they bypass pause.
+            refreshGemApv(gemApvCurrentEvent);
         })
         .catch(err => {
             console.warn('gem threshold POST failed:', err);

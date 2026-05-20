@@ -382,7 +382,11 @@ function initAutoReport(){
 
 let navDirection=1;  // +1=forward, -1=backward (for trigger filter auto-skip)
 
-function loadEventData(reqId, data) {
+// `manual` distinguishes user-initiated event swaps (file-mode arrow keys /
+// prev-next / jump-to, online ring-buffer nav) from the auto-refresh path
+// (online WS new_event → loadLatestEvent).  Currently only the gem_apv tab
+// cares — its pause gate bypasses on manual=true.
+function loadEventData(reqId, data, manual) {
     if (reqId !== eventRequestId) return;  // stale response, discard
     if (data.error) {
         document.getElementById('status-bar').textContent = data.error;
@@ -430,7 +434,15 @@ function loadEventData(reqId, data) {
         // Right panel is per-event-independent (efficiency cards + last-good
         // snapshot), refreshed on the histogram cadence by fetchGemAccum.
     } else if(activeTab==='gem_apv'){
-        if(typeof fetchGemApvData==='function') fetchGemApvData(currentEvent);
+        // Route through the gem_apv tab's pause + source gate so a paused
+        // panel stays frozen and a 'Latest full-readout' panel ignores the
+        // per-event stream (it follows gem_apv_full_event instead).  The
+        // `manual` flag (threaded from loadEvent → loadEventData) signals
+        // user navigation, which bypasses pause — pause is for the live
+        // WS push, not for "I clicked next/prev".  Pre-update viewers
+        // without the gate function fall back to direct fetch.
+        if(typeof gemApvOnLiveEvent==='function') gemApvOnLiveEvent(currentEvent, 'event', !!manual);
+        else if(typeof fetchGemApvData==='function') fetchGemApvData(currentEvent);
     } else {
         geoDq();
     }
@@ -455,13 +467,13 @@ function loadEvent(evnum) {
         }
     }
     document.getElementById('status-bar').textContent = `Loading sample ${evnum}...`;
-    fetch(`/api/event/${evnum}`).then(r => r.json()).then(d => loadEventData(reqId, d))
+    fetch(`/api/event/${evnum}`).then(r => r.json()).then(d => loadEventData(reqId, d, true))
         .catch(err => { document.getElementById('status-bar').textContent = `Error: ${err}`; });
 }
 
 function loadLatestEvent() {
     const reqId = ++eventRequestId;
-    fetch('/api/event/latest').then(r => r.json()).then(d => loadEventData(reqId, d))
+    fetch('/api/event/latest').then(r => r.json()).then(d => loadEventData(reqId, d, false))
         .catch(err => { document.getElementById('status-bar').textContent = `Error: ${err}`; });
 }
 
@@ -533,7 +545,19 @@ function switchTab(tab, opts){
         physics: { fetch(){ fetchPhysics(); } },
         gem:     { fetch(){ fetchGemAccum(); },
                    after(){ resizeGem(); } },
-        gem_apv: { fetch(){ fetchGemApvData(currentEvent); },
+        gem_apv: { fetch(){
+                       // Honour pause across tab switches — if the operator
+                       // froze the panel on event N, switching away and back
+                       // shouldn't clobber that frame.  Otherwise pull from
+                       // the active source (current event or latest full).
+                       if (typeof gemApvPaused !== 'undefined' && gemApvPaused
+                           && typeof gemApvData !== 'undefined' && gemApvData) {
+                           if (typeof renderGemApvPanels === 'function') renderGemApvPanels();
+                           return;
+                       }
+                       if (typeof refreshGemApv === 'function') refreshGemApv(currentEvent);
+                       else if (typeof fetchGemApvData === 'function') fetchGemApvData(currentEvent);
+                   },
                    after(){ resizeGemApv(); } },
     };
     const action = tabActions[tab] || tabActions.dq;

@@ -217,6 +217,18 @@ private:
     std::deque<RingEntry> ring_;
     std::mutex ring_mtx_;
 
+    // Latest full-readout snapshot — most recent monitoring event where the
+    // firmware bypassed online ZS for every APV (or at least one).  Encoded
+    // by the ET reader with skip_sw_zs=true so the client's signal-only
+    // filter doesn't hide the entire pedestal/noise spectrum.  Served by
+    // /api/gem/apv/latest_full and announced over WS as gem_apv_full_event
+    // so the gem_apv tab can refresh selectively (it ignores the regular
+    // per-event new_event in 'Latest full-readout' source mode).
+    std::mutex  latest_full_apv_mtx_;
+    int         latest_full_apv_seq_ = 0;
+    std::string latest_full_apv_json_;
+    std::string latest_full_apv_gz_;
+
     std::atomic<bool> et_active_{false};
     std::atomic<bool> et_connected_{false};
     std::atomic<int>  et_generation_{0};    // bumped to trigger reconnect

@@ -736,7 +736,20 @@ struct AppState {
     // processGemEvent or accumulate); this method only reads.  Raw ADC
     // samples come from ssp_evt; processed values + ZS hit mask come
     // from gem_sys's per-APV working buffer.
-    nlohmann::json apiGemApv(const ssp::SspEventData &ssp_evt, int evnum) const;
+    //
+    // skip_sw_zs:
+    //   when true, every channel of an APV whose firmware did full readout
+    //   (nstrips == 128) is marked hits[ch] = 1 regardless of the software
+    //   N-sigma cut.  Used by the latest-full-readout snapshot so the
+    //   client's signal-only filter keeps the entire pedestal/noise pattern
+    //   visible.  APVs that came in firmware-ZS'd keep their normal hit mask.
+    // any_full_readout (out, optional):
+    //   set to true if any APV in this event was full-readout.  The ET
+    //   reader uses this to gate the second (snapshot) encode and the
+    //   gem_apv_full_event WS broadcast.
+    nlohmann::json apiGemApv(const ssp::SspEventData &ssp_evt, int evnum,
+                             bool skip_sw_zs = false,
+                             bool *any_full_readout = nullptr) const;
 
     // One-shot calibration payload for the GEM APV tab: returns
     //   {rev, zs_sigma, apvs:[{id, noise:[128]}, ...]}

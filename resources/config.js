@@ -60,6 +60,7 @@ function clearFrontend(){
     gemApvData=null;
     gemApvCanvases.clear();
     gemApvBuiltKey='';
+    gemApvSkippedSincePause=0;
     const apvBody=document.getElementById('gem-apv-body');
     if(apvBody) apvBody.innerHTML='';
     clearEpicsFrontend();
