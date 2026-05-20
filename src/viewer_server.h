@@ -225,7 +225,6 @@ private:
     // so the gem_apv tab can refresh selectively (it ignores the regular
     // per-event new_event in 'Latest full-readout' source mode).
     std::mutex  latest_full_apv_mtx_;
-    int         latest_full_apv_seq_ = 0;
     std::string latest_full_apv_json_;
     std::string latest_full_apv_gz_;
 

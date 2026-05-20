@@ -432,7 +432,7 @@ void ViewerServer::etReaderThread()
                         // prescaled monitoring events flagged by the first
                         // call's any_full_readout, so the regular event
                         // path keeps the same single-encode cost.
-                        if (any_full_readout && app_online_.gem_enabled) {
+                        if (any_full_readout) {
                             std::string fulljson =
                                 app_online_.apiGemApv(ssp_evt, seq, true, nullptr).dump();
                             std::string fullgz;
@@ -445,7 +445,6 @@ void ViewerServer::etReaderThread()
                             }
                             {
                                 std::lock_guard<std::mutex> lk(latest_full_apv_mtx_);
-                                latest_full_apv_seq_  = seq;
                                 latest_full_apv_json_ = std::move(fulljson);
                                 latest_full_apv_gz_   = std::move(fullgz);
                             }

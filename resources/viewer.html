@@ -526,16 +526,16 @@
         <div class="gem-apv-toolbar">
             <button id="gem-apv-pause" type="button"
                     title="Freeze the panel on the currently displayed event. Manual actions (σ change, navigation, mode/layout/source change) still refresh.">▶ Live</button>
-            <label title="Source — Current event follows the live stream; Latest full-readout holds the most recent monitoring event that bypassed firmware ZS (so the entire pedestal/noise spectrum is visible across all 128 channels).">Source
+            <label title="Source — Latest full-readout (default) holds the most recent monitoring event that bypassed firmware ZS, so the entire pedestal/noise spectrum is visible across all 128 channels; Current event follows the live stream.">Source
                 <select id="gem-apv-source" style="font-size:11px">
                     <option value="current">Current event</option>
-                    <option value="full">Latest full-readout</option>
+                    <option value="full" selected>Latest full-readout</option>
                 </select>
             </label>
-            <label title="Layout — Overlay stacks 6 time samples on the same channel axis (default); Sequential lays them out in time order (prad1 style) on a 128×6=768-step axis.">Layout
+            <label title="Layout — Sequential (default) lays the 6 time samples out in time order (prad1 style) on a 128×6=768-step axis; Overlay stacks them on the same channel axis.">Layout
                 <select id="gem-apv-layout" style="font-size:11px">
                     <option value="overlay">Overlay</option>
-                    <option value="sequential">Sequential</option>
+                    <option value="sequential" selected>Sequential</option>
                 </select>
             </label>
             <label><input type="checkbox" id="gem-apv-process" checked> Process</label>

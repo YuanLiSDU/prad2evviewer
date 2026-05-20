@@ -107,18 +107,23 @@ let gemApvSampleMask = [true, true, true, true, true, true];
 // configurations don't disappear silently.
 let gemApvDetMask = [true, true, true, true];
 
-// Layout — 'overlay' (default; 6 TS stacked on the same channel axis) or
-// 'sequential' (prad1 style; 128×6 = 768 points laid out in time order).
-let gemApvLayout = gemApvPrefGet('layout', 'overlay');
-// Source — 'current' (default; follows the live stream) or 'full' (locks
-// onto the most recent full-readout monitoring event, served from a
-// separate server-side snapshot via /api/gem/apv/latest_full).
-let gemApvSource = gemApvPrefGet('source', 'current');
+// Layout — 'sequential' (default; prad1 style, 128×6 = 768 points laid out
+// in time order) or 'overlay' (6 TS stacked on the same channel axis).
+// Defaults to the RC monitoring view so Ashot/Kondo see the expected plot
+// without flipping a toggle; operators can still switch via the Layout
+// select and the choice persists in localStorage.
+let gemApvLayout = gemApvPrefGet('layout', 'sequential');
+// Source — 'full' (default; locks onto the most recent full-readout
+// monitoring event, served from a separate server-side snapshot via
+// /api/gem/apv/latest_full) or 'current' (follows the live stream).
+// 'full' is the requested RC monitoring view — bypasses online ZS so the
+// entire pedestal/noise spectrum is visible across all 128 channels.
+let gemApvSource = gemApvPrefGet('source', 'full');
 // Normalize — older builds or a corrupted localStorage entry could leave
 // these as anything; an unknown gemApvSource value would silently freeze
 // the WS gate (both 'event' and 'full_event' branches would return).
-if (gemApvLayout !== 'overlay' && gemApvLayout !== 'sequential') gemApvLayout = 'overlay';
-if (gemApvSource !== 'current' && gemApvSource !== 'full')       gemApvSource = 'current';
+if (gemApvLayout !== 'overlay' && gemApvLayout !== 'sequential') gemApvLayout = 'sequential';
+if (gemApvSource !== 'current' && gemApvSource !== 'full')       gemApvSource = 'full';
 // Pause — freezes auto-refresh on this tab.  WS new_event /
 // gem_apv_full_event notifications skip the refetch while true; explicit
 // user actions (σ change, navigation, source/layout change) still refresh.
