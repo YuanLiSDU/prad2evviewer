@@ -450,7 +450,7 @@ function renderGemApvPanels() {
 
     const mode = gemApvShowProcessed ? 'processed' : 'raw';
     const layoutLbl = (gemApvLayout === 'sequential') ? ' seq' : '';
-    const srcLbl = (gemApvSource === 'full') ? ' full' : '';
+    const srcLbl = (gemApvSource === 'full') ? ' mon' : '';
     const evlbl = gemApvCurrentEvent > 0 ? `evt ${gemApvCurrentEvent}` : '';
     const pauseLbl = gemApvPaused
         ? `  PAUSED${gemApvSkippedSincePause ? ` (skipped ${gemApvSkippedSincePause})` : ''}`
