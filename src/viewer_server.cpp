@@ -573,7 +573,7 @@ void ViewerServer::buildHistograms()
     );
 
     std::cerr << "  Histograms: " << app_file_.events_processed.load() << " events"
-              << ", clusters: " << app_file_.cluster_events_processed
+              << ", clusters: " << app_file_.cluster_events_processed.load()
               << ", LMS: " << app_file_.lms_events.load() << "\n";
 }
 

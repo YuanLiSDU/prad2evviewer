@@ -49,7 +49,7 @@ const THEME_SETTLE_MS = 250;  // post-theme-flip settling
 const REPORT_TABS = [
     {tab:'dq',      title:'Waveform Data',     filename:'tab_dq.png',      prep:_prepDqTab},
     {tab:'lms',     title:'Gain Monitoring',   filename:'tab_lms.png',     prep:_prepLmsTab},
-    {tab:'cluster', title:'Clustering',        filename:'tab_cluster.png', prep:null},
+    {tab:'cluster', title:'Clustering',        filename:'tab_cluster.png', prep:_prepClusterTab},
     {tab:'gem',     title:'GEM Detectors',     filename:'tab_gem.png',     prep:null},
     {tab:'gem_apv', title:'GEM APV Waveforms', filename:'tab_gem_apv.png', prep:null},
     {tab:'epics',   title:'EPICS Slow Control',filename:'tab_epics.png',   prep:_prepEpicsTab},
@@ -74,22 +74,80 @@ const ALL_TAB_PANEL_IDS = ['geo-panel','div-main','detail-panel','lms-panel',
 
 function _wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-// Force the DQ tab to its occupancy view for the screenshot, regardless of
-// what the user is currently looking at.  Returns a restore function.
+// Force the DQ tab to a deterministic capture state and return a restore
+// function.  Five things move:
+//   1) color-metric  -> 'occupancy'   (so the geo legend matches the title)
+//   2) focus-pbwo4   -> unchecked     (deterministic Lead-Glass dim state)
+//   3) selectedModule -> null         (no per-channel detail panel leak)
+//   4) detail-header / four detail Plotly divs / peaks table -> placeholder
+//   5) repaint via geoDq() so the swap lands before the screenshot
+// clearFrontend() (config.js:1-73) deliberately keeps selectedModule across
+// server-side autoclear so the live UI stays responsive — that's why we
+// have to wipe-and-restore here per-capture instead of relying on the
+// server's hist_cleared broadcast.
 function _prepDqTab(){
-    const sel=document.getElementById('color-metric');
-    const prev=sel.value;
-    if(prev!=='occupancy'){
+    const sel           = document.getElementById('color-metric');
+    const focus         = document.getElementById('focus-pbwo4');
+    const detailHeader  = document.getElementById('detail-header');
+    const peaksTbody    = document.getElementById('peaks-tbody');
+
+    const prevMetric    = sel ? sel.value : '';
+    const prevFocus     = focus ? focus.checked : false;
+    const prevFocusVar  = (typeof geoFocusPbWO4==='boolean') ? geoFocusPbWO4 : false;
+    const prevSelected  = (typeof selectedModule!=='undefined') ? selectedModule : null;
+    const prevWf        = (typeof currentWaveform!=='undefined') ? currentWaveform : null;
+    const prevHist      = (typeof currentHist!=='undefined') ? currentHist : {};
+    const prevHeader    = detailHeader ? detailHeader.innerHTML : '';
+    const prevPeaks     = peaksTbody ? peaksTbody.innerHTML : '';
+
+    if(sel && prevMetric!=='occupancy'){
         sel.value='occupancy';
         if(typeof syncDqRange==='function') syncDqRange();
-        if(typeof geoDq==='function') geoDq();
     }
+    if(focus && prevFocus){
+        focus.checked=false;
+    }
+    if(typeof geoFocusPbWO4!=='undefined') geoFocusPbWO4=false;
+    if(typeof selectedModule!=='undefined') selectedModule=null;
+    if(typeof currentWaveform!=='undefined') currentWaveform=null;
+    if(typeof currentHist!=='undefined') currentHist={};
+    if(detailHeader)
+        detailHeader.innerHTML =
+            '<div class="empty-msg">No module selected (auto-report capture)</div>';
+    if(peaksTbody) peaksTbody.innerHTML='';
+    try{
+        // Match the switchTab-DQ placeholder pattern at viewer.js:96-103.
+        Plotly.react('waveform-div',  [], wfLayout('', wfWindowNs()), PC2);
+        Plotly.react('heighthist-div',[], {...PL,title:{text:'Height Histogram',
+            font:{size:10,color:THEME.textMuted}}}, PC2);
+        Plotly.react('inthist-div',   [], {...PL,title:{text:'Integral Histogram',
+            font:{size:10,color:THEME.textMuted}}}, PC2);
+        Plotly.react('poshist-div',   [], {...PL,title:{text:'Position Histogram',
+            font:{size:10,color:THEME.textMuted}}}, PC2);
+    }catch(e){ /* missing plotly divs on a stripped page — non-fatal */ }
+    if(typeof geoDq==='function') geoDq();
+
     return ()=>{
-        if(prev!==sel.value){
-            sel.value=prev;
+        if(sel && sel.value!==prevMetric){
+            sel.value=prevMetric;
             if(typeof syncDqRange==='function') syncDqRange();
-            if(typeof geoDq==='function') geoDq();
         }
+        if(focus && focus.checked!==prevFocus){
+            focus.checked=prevFocus;
+        }
+        if(typeof geoFocusPbWO4!=='undefined') geoFocusPbWO4=prevFocusVar;
+        if(typeof selectedModule!=='undefined') selectedModule=prevSelected;
+        if(typeof currentWaveform!=='undefined') currentWaveform=prevWf;
+        if(typeof currentHist!=='undefined') currentHist=prevHist;
+        if(detailHeader) detailHeader.innerHTML=prevHeader;
+        if(peaksTbody)   peaksTbody.innerHTML=prevPeaks;
+        // If the user had a focused channel, re-render its waveform +
+        // histograms + peaks table from the live event stream so the live
+        // UI returns to the prior state once the capture finishes.
+        if(prevSelected && typeof showWaveform==='function'){
+            try{ showWaveform(prevSelected); }catch(e){}
+        }
+        if(typeof geoDq==='function') geoDq();
     };
 }
 
@@ -137,7 +195,21 @@ function _prepLmsTab(){
 // geometry.  No state to restore — the next live refresh will
 // reapply the same data anyway — but we still return a no-op restore
 // so captureTabScreenshot waits THEME_SETTLE_MS for Plotly to land
-// its re-render before the screenshot fires.
+// its re-render before the screenshot fires.  Cluster, EPICS, and
+// Physics all share this hidden-panel-Plotly-react problem.
+function _prepClusterTab(){
+    // Includes the shared geo (HyCal occupancy on the left) so it
+    // matches the right-half plots' freshly re-react'd traces.
+    try{
+        if(typeof plotClHist==='function')        plotClHist();
+        if(typeof plotRawEnergyHist==='function') plotRawEnergyHist();
+        if(typeof plotClStatHists==='function')   plotClStatHists();
+        if(typeof plotGemResiduals==='function')  plotGemResiduals();
+        if(typeof geoCluster==='function')        geoCluster();
+    }catch(e){ /* fall through — captureTabScreenshot still snapshots what it has */ }
+    return ()=>{};
+}
+
 function _prepEpicsTab(){
     if(typeof plotEpicsSlot==='function' &&
        typeof EPICS_NUM_SLOTS!=='undefined')
@@ -372,9 +444,11 @@ function mdTable(headers,rows,alignments){
 // =========================================================================
 
 async function _summaryDq(){
-    let s='';
-    if(occTotal>0) s+=`Total events: ${occTotal}\n\n`;
-    return s;
+    if(occTotal>0) return `Total events: ${occTotal}\n\n`;
+    // Placeholder ensures the section under the screenshot is never bare,
+    // so a reviewer can't mistake "missing data" for "section intentionally
+    // empty".  Same pattern repeats in the other _summary* fns below.
+    return `_No waveform events accumulated (occTotal=0)._\n\n`;
 }
 
 async function _summaryLms(){
@@ -461,25 +535,35 @@ async function _summaryLms(){
 }
 
 async function _summaryCluster(){
-    if(!clHistBins||!clHistBins.some(b=>b>0)) return '';
-    const sum=clHistBins.reduce((a,b)=>a+b,0);
-    return `Cluster events: ${clHistEvents||0} | Histogram entries: ${sum}\n\n`;
+    if(clHistBins && clHistBins.some(b=>b>0)) {
+        const sum=clHistBins.reduce((a,b)=>a+b,0);
+        return `Cluster events: ${clHistEvents||0} | Histogram entries: ${sum}\n\n`;
+    }
+    // raw_energy may have entries even when cluster_energy doesn't (events
+    // passed cluster_trigger but produced zero clusters); mention it so the
+    // 'Raw Energy Sum' bin in the screenshot isn't mysterious.
+    const raw=(typeof rawEnergyBins!=='undefined' && rawEnergyBins)
+              ? rawEnergyBins.reduce((a,b)=>a+b,0) : 0;
+    return raw>0
+        ? `_No reconstructed clusters yet (raw-energy fills = ${raw})._\n\n`
+        : `_No clustering events accumulated._\n\n`;
 }
 
 async function _summaryGem(){
-    let s='';
     let data;
-    try{ data=await fetch('/api/gem/hist').then(r=>r.json()); }catch(e){ return s; }
-    if(!data) return s;
+    try{ data=await fetch('/api/gem/hist').then(r=>r.json()); }catch(e){ return ''; }
+    if(!data) return '';
     if(data.nclusters && data.nclusters.bins){
         const total=data.nclusters.bins.reduce((a,b)=>a+b,0);
-        s+=`GEM events: ${total}\n\n`;
+        if(total>0) return `GEM events: ${total}\n\n`;
+        return `_No GEM cluster events yet (matched ep events = 0)._\n\n`;
     }
-    return s;
+    return `_GEM histogram endpoint returned no nclusters block._\n\n`;
 }
 
 async function _summaryGemApv(){
-    if(!gemApvData || !gemApvData.enabled) return '';
+    if(!gemApvData || !gemApvData.enabled)
+        return `_No GEM APV snapshot available (full-readout event not seen since last clear)._\n\n`;
     const ndets=(gemApvData.detectors||[]).length;
     const napvs=(gemApvData.apvs||[]).length;
     const evnum=(typeof gemApvCurrentEvent==='number')?gemApvCurrentEvent:'?';
@@ -493,7 +577,8 @@ async function _summaryPhysics(){
     try{ data=await fetch('/api/physics/energy_angle').then(r=>r.json()); }catch(e){}
     try{ ml=await fetch('/api/physics/moller').then(r=>r.json()); }catch(e){}
     try{ hxy=await fetch('/api/physics/hycal_xy').then(r=>r.json()); }catch(e){}
-    if((!data||!data.events) && (!ml||!ml.total_events) && (!hxy||!hxy.total_events)) return '';
+    if((!data||!data.events) && (!ml||!ml.total_events) && (!hxy||!hxy.total_events))
+        return `_No physics events accumulated (energy/angle, Møller, HyCal-XY all empty)._\n\n`;
     const evts=data?.events || ml?.total_events || hxy?.total_events || 0;
     let s=`Events: ${evts}`;
     if(data?.beam_energy) s+=` | Beam: ${data.beam_energy.toFixed(2)} MeV`;
@@ -582,7 +667,7 @@ async function refreshDataForReport(){
 // Report generation core
 // =========================================================================
 
-// Generate the report. Returns {md, attachments} or null.
+// Generate the report. Returns {md, attachments, low_data, partial} or null.
 async function generateReport(reportBy,runNumber){
     if(!modules.length){
         alert('No data loaded. Please load data before generating a report.');
@@ -602,6 +687,24 @@ async function generateReport(reportBy,runNumber){
         // has 10k+ events for the run, which is what the report is
         // actually summarising.
         const samples=mode==='online'?occTotal:totalEvents;
+        // Empty-state detection.  refreshDataForReport has just landed
+        // the three counters as globals, so the read is synchronous.
+        // _suspicious -> every accumulator that has a per-tab summary
+        //                line was empty at capture (the run_024790
+        //                failure mode).
+        // _partial    -> BOTH occupancy/recon samples AND cluster
+        //                events are below partialThr.  Deliberately
+        //                an AND, not an OR: a cluster-rich run with
+        //                undersampled occupancy (or vice-versa) is
+        //                still informative enough not to flag.  Set
+        //                partial_threshold_events = 0 to disable.
+        const clusterEvts = (typeof clHistEvents==='number') ? clHistEvents : 0;
+        const lmsEvts     = (lmsSummaryData && lmsSummaryData.events) || 0;
+        const _suspicious = (samples===0 && clusterEvts===0 && lmsEvts===0);
+        const partialThr  = (typeof autoReportPartialThreshold==='number')
+                          ? autoReportPartialThreshold : 1000;
+        const _partial    = !_suspicious && partialThr>0 &&
+                            samples<partialThr && clusterEvts<partialThr;
         const runStr=runNumber?String(runNumber).padStart(6,'0'):'';
         const titleRun=runStr?`Run ${runStr}: `:'';
         let header=`# ${titleRun}PRad-II HyCal Monitor Report\n\n`;
@@ -609,6 +712,15 @@ async function generateReport(reportBy,runNumber){
         header+=`- **Samples:** ${samples}\n`;
         if(runNumber) header+=`- **DAQ Run:** ${runNumber}\n`;
         if(reportBy) header+=`- **Report by:** ${reportBy}\n`;
+        if(_suspicious){
+            header+=`\n> **WARNING: No data captured for this report.**\n`+
+                    `> events_processed = ${samples}, cluster_events = ${clusterEvts}, lms_events = ${lmsEvts}.\n`+
+                    `> Likely causes: server restarted mid-run, schedule trigger fired before the run accumulated data, or accumulators were manually cleared just before the capture.\n`+
+                    `> Inspect the screenshots manually before treating this as a run state summary.\n\n`;
+        } else if(_partial){
+            header+=`\n> **Note:** Partial-run report (samples=${samples}, cluster events=${clusterEvts}).\n`+
+                    `> The schedule trigger fired before the run had accumulated typical statistics; subsequent reports for this run will supersede this one.\n\n`;
+        }
         let sectionsMd='';
         for(const entry of reportRegistry){
             try{
@@ -635,7 +747,8 @@ async function generateReport(reportBy,runNumber){
         let md=header+`\n---\n\n`+sectionsMd;
         md+=`---\n*PRad-II HyCal Online Monitor — Report generated ${ts}*\n`;
         statusBar.textContent=prevStatus;
-        return {md, attachments:reportAttachments};
+        return {md, attachments:reportAttachments,
+                low_data:_suspicious, partial:_partial};
     }catch(err){
         statusBar.textContent=`Report error: ${err.message}`;
         return null;
@@ -692,16 +805,20 @@ function buildElogXml(title,logbook,author,tags,body,attachments){
 
 function elogAvailable(){ return !!(elogConfig && elogConfig.url); }
 
-function autoReportTitle(runNumber){
+function autoReportTitle(runNumber, lowData){
     const baseTitle='PRad2 Event Monitor Auto Report';
-    return runNumber ? `Run #${runNumber}: ${baseTitle}` : baseTitle;
+    // [NO-DATA] prefix makes a bad report unmistakable in the elog
+    // titles list before anyone opens the entry.  See report.js
+    // _suspicious flag in generateReport for the trigger condition.
+    const prefix = lowData ? '[NO-DATA] ' : '';
+    return runNumber ? `${prefix}Run #${runNumber}: ${baseTitle}`
+                     : `${prefix}${baseTitle}`;
 }
 
 async function handleCaptureRequest(msg){
     const runNumber = msg && msg.run     || 0;
     const reason    = msg && msg.reason  || 'auto';
     const requestId = msg && msg.request_id || '';
-    const fullTitle = autoReportTitle(runNumber);
     const sb = document.getElementById('status-bar');
 
     if(!elogAvailable() || !modules.length){
@@ -720,6 +837,12 @@ async function handleCaptureRequest(msg){
             if(sb) sb.textContent = 'Auto-report failed: report generation';
             return;
         }
+        // generateReport sets low_data when every per-tab accumulator was
+        // empty at capture time — used here for the title prefix and
+        // threaded through the POST so the server filenames + summary
+        // record agree with the body banner.
+        const lowData   = !!report.low_data;
+        const fullTitle = autoReportTitle(runNumber, lowData);
         // Tags must come from the logbook's enumerated set; the reason
         // ("end" / "run-change") is informational only, so we surface
         // it in the body rather than as a tag (it would fail PRADLOG's
@@ -734,7 +857,7 @@ async function handleCaptureRequest(msg){
         const resp = await fetch('/api/elog/post', {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({xml, auto:true, run_number:runNumber,
-                                  request_id:requestId})
+                                  request_id:requestId, low_data:lowData})
         });
         const r = await resp.json();
         if(r.ok && r.dry_run){

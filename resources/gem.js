@@ -90,7 +90,14 @@ function plotGemOccupancy(data) {
     });
     let zmax = 0;
     for (const g of grids) if (g && g.local_max > zmax) zmax = g.local_max;
-    if (zmax <= 0) zmax = 1e-6;   // avoid Plotly auto-scaling to a flat plot
+    // empty == "we received the response, but every bin is zero".  Without
+    // this branch we'd clamp to 1e-6 with a 'Hot' colorscale, which paints
+    // every cell at the very bottom of the scale (solid black) and reads
+    // like a broken display in auto-report screenshots — see run_024790
+    // tab_gem.png.  In the empty case we switch to a flat neutral grey and
+    // attach a centered "No GEM data" annotation on the first panel.
+    const empty = (zmax <= 0);
+    if (empty) zmax = 1e-6;
 
     // Compact per-heatmap layout: thin colourbar only on the right column
     // (cells 1 and 3), no axis titles, small title font.
@@ -137,6 +144,14 @@ function plotGemOccupancy(data) {
             yRange = [yLo - padY, yHi + padY];
         }
 
+        // Centered "no data" annotation only on idx===0 — four copies would
+        // clutter the screenshot for no extra information.
+        const annotations = (empty && idx === 0) ? [{
+            xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+            text: 'No GEM data', showarrow: false,
+            font: { size: 14, color: THEME.textMuted || THEME.text },
+        }] : [];
+
         // scaleanchor keeps mm in x and y at the same screen scale, so the
         // detector frame is drawn at its true geometric ratio (matches the
         // efficiency-grid panel on the right).
@@ -152,6 +167,7 @@ function plotGemOccupancy(data) {
                      scaleanchor: 'x', scaleratio: 1, constrain: 'domain' },
             margin: showBar ? compactMarginR : compactMargin,
             shapes: shapes,
+            annotations: annotations,
         });
 
         if (!g) {
@@ -174,14 +190,20 @@ function plotGemOccupancy(data) {
         const xArr = Array.from({length: nx}, (_, i) => occxLo + (i + 0.5) * xStep);
         const yArr = Array.from({length: ny}, (_, i) => occyLo + (i + 0.5) * yStep);
 
+        // Flat neutral grey when we have no data — beats 'Hot'-at-zero
+        // (solid black, looks broken).  Stops being neutral as soon as
+        // any bin gets a fill, since `empty` is recomputed each call.
+        const cs = empty
+            ? [[0, 'rgba(140,140,140,0.18)'], [1, 'rgba(140,140,140,0.18)']]
+            : 'Hot';
         const trace = {
             x: xArr, y: yArr, z: g.z,
             type: 'heatmap',
-            colorscale: 'Hot',
+            colorscale: cs,
             zmin: 0, zmax: zmax,
             zauto: false,
             hovertemplate: det.name + '<br>x=%{x:.0f}<br>y=%{y:.0f}<br>rate=%{z:.4f}<extra></extra>',
-            showscale: showBar,
+            showscale: showBar && !empty,
         };
         if (showBar) {
             trace.colorbar = { thickness: 6, tickfont: { size: 8 }, tickformat: '.2f', len: 0.92 };

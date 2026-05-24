@@ -248,7 +248,8 @@ struct LocalSaveResult {
 };
 
 LocalSaveResult _saveReportLocally(const std::string &local_save_dir,
-                                   uint32_t run, const std::string &xml_body)
+                                   uint32_t run, const std::string &xml_body,
+                                   bool low_data = false)
 {
     LocalSaveResult r;
     if (local_save_dir.empty()) {
@@ -267,7 +268,11 @@ LocalSaveResult _saveReportLocally(const std::string &local_save_dir,
     std::time_t t = std::time(nullptr);
     char ts[32];
     std::strftime(ts, sizeof(ts), "%Y%m%dT%H%M%SZ", std::gmtime(&t));
-    r.xml = r.dir / (std::string("report_") + ts + ".xml");
+    // .lowdata. infix makes `ls reports/run_NNNNNN/` reveal an empty-state
+    // report at a glance — title prefix + body banner are body-internal,
+    // but the filename is what an operator sees first in the listing.
+    const char *suffix = low_data ? ".lowdata.xml" : ".xml";
+    r.xml = r.dir / (std::string("report_") + ts + suffix);
     {
         std::ofstream f(r.xml);
         if (!f) { r.error = "open " + r.xml.string() + " failed"; return r; }
@@ -299,6 +304,12 @@ json ViewerServer::handleElogPost(const std::string &body)
     bool        is_auto   = req.value("auto", false);
     uint32_t    run       = req.value("run_number", 0u);
     std::string request_id = req.value("request_id", std::string());
+    // Suspicious-report marker: client sets this when every cumulative
+    // accumulator (events_processed / cluster_events / lms_events) was
+    // empty at capture time.  Threaded into the saved filename and the
+    // summary.json record so operators can spot bad reports without
+    // diffing against historical baselines.
+    bool        low_data  = req.value("low_data", false);
 
     // On-demand auto-post validation: when auto:true, request_id MUST
     // be present and match the in-flight pending capture.  Empty or
@@ -371,7 +382,8 @@ json ViewerServer::handleElogPost(const std::string &body)
         }
     }
 
-    auto sr = _saveReportLocally(app.auto_report_local_save_dir, run, xml_body);
+    auto sr = _saveReportLocally(app.auto_report_local_save_dir, run,
+                                 xml_body, low_data);
     if (!sr.ok) {
         std::cerr << "Elog local-save: " << sr.error << "\n";
         return {{"ok", false},
@@ -447,7 +459,8 @@ json ViewerServer::handleElogPost(const std::string &body)
                      {"saved_xml", saved_xml}};
         wsBroadcast(done.dump());
         appendAutoReportSummary(run, saved_xml, ok, std::string(),
-                                std::string("upload"), std::string());
+                                std::string("upload"), std::string(),
+                                low_data);
     }
     return {{"ok", ok}, {"posted", ok}, {"status", http_code},
             {"saved_dir", saved_dir}, {"saved_xml", saved_xml}};
@@ -511,7 +524,8 @@ void ViewerServer::appendAutoReportSummary(uint32_t run,
                                            bool posted,
                                            const std::string &lognumber,
                                            const std::string &reason,
-                                           const std::string &error)
+                                           const std::string &error,
+                                           bool low_data)
 {
     auto &app = activeApp();
     if (app.auto_report_local_save_dir.empty()) return;
@@ -542,6 +556,7 @@ void ViewerServer::appendAutoReportSummary(uint32_t run,
         {"reason",    reason},
     };
     if (!error.empty()) rec["error"] = error;
+    if (low_data)       rec["low_data"] = true;
     doc["runs"].push_back(rec);
 
     std::ofstream f(path, std::ios::trunc);
@@ -757,11 +772,17 @@ void ViewerServer::tickAutoClear()
 
 void ViewerServer::runAutoClearNow()
 {
-    std::cerr << "AutoClear: firing — clearing histograms / lms / epics\n";
+    std::cerr << "AutoClear: firing — clearing histograms / lms / epics / gem_apv_full\n";
     auto &app = activeApp();
     app.clearHistograms();
     app.clearLms();
     app.clearEpics();
+    // Drop the most-recent monitoring-event GEM APV snapshot too — it lives
+    // in viewer_server.h (not AppState) and is fed only by the ET reader,
+    // so clearHistograms doesn't touch it.  Without this the GEM APV tab in
+    // "Source: Monitoring event" mode would keep showing an evt number from
+    // the previous run after autoclear fires.
+    clearLatestFullApv();
     // Per-domain broadcasts keep existing handlers (which do partial UI
     // resets) in step.  The autoclear_done broadcast piggy-backs on top
     // so clients can run a single full clearFrontend in one place
@@ -770,6 +791,15 @@ void ViewerServer::runAutoClearNow()
     wsBroadcast("{\"type\":\"lms_cleared\"}");
     wsBroadcast("{\"type\":\"epics_cleared\"}");
     wsBroadcast("{\"type\":\"autoclear_done\"}");
+}
+
+void ViewerServer::clearLatestFullApv()
+{
+#ifdef WITH_ET
+    std::lock_guard<std::mutex> lk(latest_full_apv_mtx_);
+    latest_full_apv_json_.clear();
+    latest_full_apv_gz_.clear();
+#endif
 }
 
 // =========================================================================
@@ -807,23 +837,58 @@ void ViewerServer::tickAutoReportSchedule()
 {
     constexpr auto RETRY_THROTTLE = std::chrono::seconds(5);
 
-    uint32_t run_to_fire = 0;
+    uint32_t run_to_fire   = 0;
+    bool     waiting_data  = false;   // schedule deferred by data-readiness gate
+    uint32_t waiting_run   = 0;       // for the throttled log line below
     {
         std::lock_guard<std::mutex> lk(ar_sched_mtx_);
         if (!ar_sched_.armed || ar_sched_.fired || ar_sched_.run == 0)
             return;
-        int sched_min = activeApp().auto_report_schedule_minutes;
+        auto &app = activeApp();
+        int sched_min = app.auto_report_schedule_minutes;
         if (sched_min <= 0) return;
         auto now = std::chrono::steady_clock::now();
         if (now - ar_sched_.started < std::chrono::minutes(sched_min))
             return;
+
+        // Data-readiness gate.  The schedule trigger is the only
+        // speculative path (END / run-change fire on events that
+        // themselves prove the run produced something); without this
+        // gate it can dispatch against fully empty accumulators when
+        // the server is restarted mid-run, when PRESTART arms the
+        // timer long before any physics event arrives, or whenever
+        // the autoclear-after-END leaves the new run starved.  All
+        // three counters are atomic — no lock needed and no contention
+        // with the EVIO/recon hot path that holds data_mtx.  Set
+        // min_events_for_schedule = 0 to disable (legacy behaviour).
+        int min_evts = app.auto_report_min_events_for_schedule;
+        int cap_min  = app.auto_report_schedule_max_wait_min;
+        bool ceiling_hit = (cap_min > 0) &&
+            (now - ar_sched_.started >=
+                std::chrono::minutes(sched_min + cap_min));
+        if (min_evts > 0 && !ceiling_hit) {
+            int evts   = app.events_processed.load();
+            int clevts = app.cluster_events_processed.load();
+            int lmsev  = app.lms_events.load();
+            if (evts < min_evts && clevts < min_evts && lmsev < min_evts) {
+                waiting_data = true;
+                waiting_run  = ar_sched_.run;
+            }
+        }
+
         // Retry-on-failure throttle: don't hammer dispatchCapture every
         // TICK_MS when there's no capable client.  5 s is plenty fast
         // to catch a tab that just connected, and quiet enough to keep
-        // the log readable.
+        // the log readable.  Also throttles the deferral log line below.
         if (now - ar_sched_.last_attempt < RETRY_THROTTLE) return;
-        run_to_fire           = ar_sched_.run;
         ar_sched_.last_attempt = now;
+        if (!waiting_data) run_to_fire = ar_sched_.run;
+    }
+    if (waiting_data) {
+        std::cerr << "AutoReport: schedule deferred for run "
+                  << waiting_run << " — accumulators below "
+                  << "min_events_for_schedule floor (waiting for data)\n";
+        return;
     }
     std::cerr << "AutoReport: schedule timer fired for run "
               << run_to_fire << "\n";

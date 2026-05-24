@@ -449,6 +449,24 @@ struct AppState {
     // are dropped by the per-run on-disk dedup.  Set to 0 to disable
     // the timer trigger and rely solely on run-change / END.
     int         auto_report_schedule_minutes = 45;
+    // Data-readiness gate for the schedule trigger.  When schedule_minutes
+    // elapses, dispatch is held until at least one of the three counters
+    // (events_processed / cluster_events_processed / lms_events) reaches
+    // this floor.  Guards against the "PRESTART armed timer but no physics
+    // events ever flowed" failure mode that produced the empty run_024790
+    // report.  Set to 0 to disable the gate (legacy immediate-fire).
+    int         auto_report_min_events_for_schedule = 100;
+    // Hard ceiling on schedule-gate deferral.  Once
+    // schedule_minutes + schedule_max_wait_min elapses the schedule
+    // dispatch fires regardless of accumulator state (the suspicious-
+    // report marker pipeline on the client then flags the body / title /
+    // filename as low-data).  0 = wait forever, rely entirely on
+    // run-change / END for this run.
+    int         auto_report_schedule_max_wait_min = 60;
+    // Below this samples-count the auto-report body adds a "Partial-run
+    // report" header note.  Surfaced to clients via /api/auto_report_config
+    // and consumed by report.js generateReport().  0 disables the note.
+    int         auto_report_partial_threshold_events = 1000;
 
     // color range defaults: key "tab:metric" → [min, max]
     std::map<std::string, std::pair<float, float>> color_range_defaults;
@@ -587,7 +605,12 @@ struct AppState {
     float gem_eff_z_target_max  =  50.f;   // mm
     float gem_eff_z_target_step =   1.f;   // mm
     int         moller_events = 0;
-    int       cluster_events_processed = 0;
+    // Atomic so the auto-report schedule gate (viewer_server_http.cpp,
+    // tickAutoReportSchedule) can read it without acquiring data_mtx —
+    // data_mtx is held by the EVIO/recon hot path, so a 5 s tick that
+    // grabbed it just for one threshold read would needlessly stall
+    // event processing.  Matches events_processed / lms_events.
+    std::atomic<int> cluster_events_processed{0};
 
     // ---- LMS data (guarded by lms_mtx) -------------------------------------
     mutable std::mutex lms_mtx;

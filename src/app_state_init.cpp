@@ -539,6 +539,12 @@ void AppState::init(const std::string &db_dir,
             auto_report_min_interval_ms = ar["min_interval_ms"].get<int>();
         if (ar.contains("schedule_minutes"))
             auto_report_schedule_minutes = ar["schedule_minutes"].get<int>();
+        if (ar.contains("min_events_for_schedule"))
+            auto_report_min_events_for_schedule = ar["min_events_for_schedule"].get<int>();
+        if (ar.contains("schedule_max_wait_min"))
+            auto_report_schedule_max_wait_min = ar["schedule_max_wait_min"].get<int>();
+        if (ar.contains("partial_threshold_events"))
+            auto_report_partial_threshold_events = ar["partial_threshold_events"].get<int>();
         if (ar.contains("elog")) {
             auto &el = ar["elog"];
             if (el.contains("url"))     elog_url     = el["url"];
@@ -554,6 +560,9 @@ void AppState::init(const std::string &db_dir,
               << " post_to_elog=" << (auto_report_post_to_elog ? "yes" : "no")
               << " min_interval_ms=" << auto_report_min_interval_ms
               << " schedule_minutes=" << auto_report_schedule_minutes
+              << " min_events_for_schedule=" << auto_report_min_events_for_schedule
+              << " schedule_max_wait_min=" << auto_report_schedule_max_wait_min
+              << " partial_threshold_events=" << auto_report_partial_threshold_events
               << (auto_report_local_save_dir.empty() ? std::string()
                   : " local_save=" + auto_report_local_save_dir)
               << "\n";

@@ -296,10 +296,14 @@ private:
     // status thread) to retry stale requests.
     void autoReportWatchdog();
     // Write/refresh <local_save_dir>/summary.json after a save attempt.
+    // low_data marks a "suspicious" report (all accumulators were empty
+    // at capture time); recorded in the per-run record so operators
+    // grep'ing summary.json can spot bad reports without opening the XML.
     void appendAutoReportSummary(uint32_t run, const std::string &saved_xml,
                                  bool posted, const std::string &lognumber,
                                  const std::string &reason,
-                                 const std::string &error);
+                                 const std::string &error,
+                                 bool low_data = false);
     // Verify we can write to local_save_dir at startup.  Sets
     // save_dir_writable_ + logs result.
     void checkSaveDirWritable();
@@ -324,6 +328,10 @@ private:
     void scheduleAutoClear(int delay_ms);
     void tickAutoClear();
     void runAutoClearNow();
+    // Wipe the most-recent monitoring-event GEM APV snapshot.  Called from
+    // runAutoClearNow so the GEM APV tab's "Source: Monitoring event" view
+    // doesn't show an evt number left over from the previous run.
+    void clearLatestFullApv();
 
     // ---- Auto-report schedule (per-run 45-min timer) ----------------------
     // armScheduleForRun() is idempotent — re-arming for the same run is a

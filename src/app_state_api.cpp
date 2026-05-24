@@ -44,7 +44,7 @@ json AppState::apiClusterHist() const
 {
     std::lock_guard<std::mutex> lk(data_mtx);
     json r = histToJson(cluster_energy_hist, cl_hist_min, cl_hist_max, cl_hist_step);
-    r["events"] = cluster_events_processed;
+    r["events"] = cluster_events_processed.load();
     r["nclusters"] = histToJson(nclusters_hist,
         nclusters_hist_min, nclusters_hist_max, nclusters_hist_step);
     r["nblocks"] = histToJson(nblocks_hist,
@@ -74,7 +74,7 @@ json AppState::apiEnergyAngle() const
             {"target", {target_x, target_y, target_z}},
             {"hycal_z", hycal_transform.z},
             {"beam_energy", beam_energy.load()},
-            {"events", cluster_events_processed}};
+            {"events", cluster_events_processed.load()}};
 }
 
 json AppState::apiMoller() const
@@ -85,7 +85,7 @@ json AppState::apiMoller() const
             {"xy_x_min", moller_xy_x_min}, {"xy_x_max", moller_xy_x_max}, {"xy_x_step", moller_xy_x_step},
             {"xy_y_min", moller_xy_y_min}, {"xy_y_max", moller_xy_y_max}, {"xy_y_step", moller_xy_y_step},
             {"moller_events", moller_events},
-            {"total_events", cluster_events_processed},
+            {"total_events", cluster_events_processed.load()},
             {"target",  {target_x, target_y, target_z}},
             {"hycal_z", hycal_transform.z},
             {"cuts", {{"energy_tolerance", moller_energy_tol},
@@ -100,7 +100,7 @@ json AppState::apiHycalXY() const
             {"xy_x_min", hxy_x_min}, {"xy_x_max", hxy_x_max}, {"xy_x_step", hxy_x_step},
             {"xy_y_min", hxy_y_min}, {"xy_y_max", hxy_y_max}, {"xy_y_step", hxy_y_step},
             {"events", hycal_xy_events},
-            {"total_events", cluster_events_processed},
+            {"total_events", cluster_events_processed.load()},
             {"beam_energy", beam_energy.load()},
             {"cuts", {{"n_clusters", hxy_n_clusters},
                       {"energy_frac_min", hxy_energy_frac_min},
@@ -765,11 +765,17 @@ void AppState::fillConfigJson(json &cfg) const
         }},
     };
     cfg["auto_report"] = {
-        {"enabled",           auto_report_enabled},
-        {"post_to_elog",      auto_report_post_to_elog},
-        {"local_save_dir",    auto_report_local_save_dir},
-        {"min_interval_ms",   auto_report_min_interval_ms},
-        {"schedule_minutes",  auto_report_schedule_minutes},
+        {"enabled",                  auto_report_enabled},
+        {"post_to_elog",             auto_report_post_to_elog},
+        {"local_save_dir",           auto_report_local_save_dir},
+        {"min_interval_ms",          auto_report_min_interval_ms},
+        {"schedule_minutes",         auto_report_schedule_minutes},
+        // Surfaced to the client so report.js can flag low/partial-data
+        // reports inline; report.js falls back to its own defaults if
+        // missing, so the client and server stay backward-compatible.
+        {"min_events_for_schedule",  auto_report_min_events_for_schedule},
+        {"schedule_max_wait_min",    auto_report_schedule_max_wait_min},
+        {"partial_threshold_events", auto_report_partial_threshold_events},
         {"elog", {
             {"url", elog_url}, {"logbook", elog_logbook},
             {"author", elog_author}, {"tags", elog_tags},

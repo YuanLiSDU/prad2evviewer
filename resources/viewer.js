@@ -322,6 +322,12 @@ function passesTriggerFilter(triggerBits){
 
 let autoPostEnabled=false;     // server-controlled, from /api/config
 let autoIsReporting=false;     // true while we're handling a capture_request
+// Mirrored from /api/config -> auto_report.{partial_threshold_events,
+// min_events_for_schedule}.  report.js reads them for the empty-state
+// header banner.  0 disables the corresponding marker.  Defaults match
+// the server's so an unconfigured deployment still flags zeros.
+let autoReportPartialThreshold=1000;
+let autoReportMinEventsForSchedule=100;
 
 function autoStatusEl(){ return document.getElementById('auto-status'); }
 
@@ -360,6 +366,15 @@ function applyAutoReportConfig(cfg){
     if(!cfg) return;
     autoPostEnabled = !!cfg.enabled;
     autoUpdateStatus();
+    // Surface server-configured thresholds to report.js's empty-state
+    // banner.  Fallbacks (1000 / 100) match the server defaults, so a
+    // server that hasn't been rebuilt with the new keys still gets sane
+    // behaviour.  0 from the server explicitly disables the corresponding
+    // marker (legacy quiet-mode).
+    if(typeof cfg.partial_threshold_events === 'number')
+        autoReportPartialThreshold = cfg.partial_threshold_events;
+    if(typeof cfg.min_events_for_schedule === 'number')
+        autoReportMinEventsForSchedule = cfg.min_events_for_schedule;
 }
 
 // Manual Clear All — operator-driven, immediate.  Run-boundary
