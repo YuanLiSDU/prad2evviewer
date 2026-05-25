@@ -329,6 +329,23 @@ float PhysicsTools::EnergyLoss(float theta_deg, float E)
     return eloss;  // total energy loss in MeV
 }
 
+bool PhysicsTools::isMoller_kinematic(float theta_deg1, float energy1, float theta_deg2, float energy2, float EBeam, float resolution)
+{
+    float expectE1 = ExpectedEnergy(theta_deg1, EBeam, "ee");
+    float expectE2 = ExpectedEnergy(theta_deg2, EBeam, "ee");
+
+    bool E_sum = false, E1_ok = false, E2_ok = false, phi_ok = false;
+
+    if(fabs(energy1 + energy2 - EBeam) < 4.f * resolution * EBeam / sqrt(EBeam/1000.f)) 
+        E_sum = true;
+    if(fabs(energy1 - expectE1) < 3.f * expectE1 * resolution / sqrt(expectE1/1000.f)) 
+        E1_ok = true;
+    if(fabs(energy2 - expectE2) < 3.f * expectE2 * resolution / sqrt(expectE2/1000.f)) 
+        E2_ok = true;
+
+    return E_sum && E1_ok && E2_ok;
+}
+
 std::array<float, 2> PhysicsTools::GetMollerCenter(MollerEvent &event1, MollerEvent &event2)
 {
     float x1[2], y1[2];

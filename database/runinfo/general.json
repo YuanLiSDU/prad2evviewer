@@ -22,19 +22,19 @@
 
     "defaults": {
         "calibration":   {"default_adc2mev": 0.12},
-        "target":        [0.0, 0.0, 0.0],
+        "target":        [0.70, 1.83, 0.0],
         "hycal": {
-            "position":  [-0.70, -1.83, 6269.81], "tilting":   [0.0, 0.0, 0.0]
+            "position":  [0.0, 0.0, 6280.0], "tilting":   [0.0, 0.0, 0.0]
         },
         "gem": {
             "detectors": [
-                {"id": 0, "position": [-229.16, -2.2, 5817.0], "tilting": [180.0, 0.0,   0.0]},
-                {"id": 1, "position": [ 226.35, -1.4, 5853.8], "tilting": [180.0, 0.0, 180.0]},
-                {"id": 2, "position": [-229.10, -1.0, 5414.0], "tilting": [180.0, 0.0,   0.0]},
-                {"id": 3, "position": [ 226.53, -1.2, 5458.0], "tilting": [180.0, 0.0, 180.0]}
+                {"id": 0, "position": [-228.302, -0.715504, 5817.97], "tilting": [180.0, 0.0,   0.0]},
+                {"id": 1, "position": [227.282, 0.276918, 5858.31], "tilting": [180.0, 0.0, 180.0]},
+                {"id": 2, "position": [-228.276, 0.561906, 5415.69], "tilting": [180.0, 0.0,   0.0]},
+                {"id": 3, "position": [227.371, 0.427827, 5461.12], "tilting": [180.0, 0.0, 180.0]}
             ]
         },
-        "matching":      {"radius": 15.0, "use_square_cut": true}
+        "matching":      {"radius": 8.0, "use_square_cut": false}
     },
 
     "configurations": [
@@ -85,5 +85,18 @@
         {"from_run": 24436, "pedestal_file": "gem_peds/gem_ped_24436.dat", "common_mode_file": "gem_peds/CommonModeRange_24436.txt"},
         {"from_run": 24495, "pedestal_file": "gem_peds/gem_ped_24495.dat", "common_mode_file": "gem_peds/CommonModeRange_24495.txt"},
         {"from_run": 24535, "pedestal_file": "gem_peds/gem_ped_24535.dat", "common_mode_file": "gem_peds/CommonModeRange_24535.txt"}
+    ],
+
+    "// Per-run overrides for beam and target positions.  Independent lookup, no chaining;":                                                   "",
+    "// if a run has an entry here, it overrides the target_* fields for that run only.":                                                                                   "",
+    "beam_target_positions": [
+        {"from_run": 24185, "target": [1.40699, 0.582474, -2.92]},
+	{"from_run": 24424, "target": [1.40699, 0.582474, -2.92]},
+	{"from_run": 24489, "target": [1.16005, 0.702111, 0.0]},
+	{"from_run": 24551, "target": [0.255953, 1.37095, -2.34]},
+	{"from_run": 24653, "target": [0.255953, 1.37095, -2.34]},
+	{"from_run": 24670, "target": [0.844334, 1.1635, 0]},
+	{"from_run": 24685, "target": [0.844334, 1.1635, 0]},
+	{"from_run": 24827, "target": [0.87584, 1.0391, -1.9]}
     ]
 }

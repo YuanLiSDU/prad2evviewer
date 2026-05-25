@@ -278,9 +278,22 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
         }
     }
 
+    // 4） beam and target positions: independent lookup; overrides the target_* fields
+    int best_beam_run = -1;
+    if (cfg.contains("beam_target_positions") && cfg["beam_target_positions"].is_array()) {
+        auto [btp, btp_run] = pick_best(cfg["beam_target_positions"]);
+        if (btp != nullptr && btp->contains("target") && (*btp)["target"].is_array() && (*btp)["target"].size() >= 3) {
+            result.target_x = (*btp)["target"][0].get<float>();
+            result.target_y = (*btp)["target"][1].get<float>();
+            result.target_z = (*btp)["target"][2].get<float>();
+            best_beam_run = btp_run;
+        }
+    }
+
     std::cerr << "RunInfo   : chained " << chain.size()
               << " config(s), last from_run=" << best_run;
     if (best_ped_run >= 0) std::cerr << "  ped_from_run=" << best_ped_run;
+    if (best_beam_run >= 0) std::cerr << "  beam_from_run=" << best_beam_run;
     std::cerr << " from " << path << "\n";
 
     // If gain_data_dir is empty (not set in JSON, or explicitly set to ""),
@@ -289,6 +302,20 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
         result.gain_data_dir =
             std::filesystem::path(path).parent_path().parent_path().string()
             + "/gain_factor";
+    }
+
+    // Apply the beam and target offset to the detector positions so that the caller gets
+    // coordinates in the beam center frame (analysis frame).
+    // Detector positions have only one entry for all the runs, in the HyCal center 
+    // coordinate frame.  When a run-specific target position is given, we shift the 
+    // HyCal and GEM positions to the beam center coordinate frame. 
+    result.hycal_x -= result.target_x;
+    result.hycal_y -= result.target_y;
+    result.hycal_z -= result.target_z;
+    for (int i = 0; i < 4; ++i) {
+        result.gem_x[i] -= result.target_x;
+        result.gem_y[i] -= result.target_y;
+        result.gem_z[i] -= result.target_z;
     }
 
     return result;
