@@ -142,43 +142,51 @@ a checked-in template):
   with a missing input on either side are skipped, not zero-counted.
   The reported `live_charge.value_nC` is therefore in **nC** (nA·s).
 
-**Splitting a run at a PV transition.** When an empty-target run is taken
-*within* a production run (the cell is emptied or filled without stopping
-the DAQ), add a `split` block and `replay_filter` writes **two** output
-files — events before the transition and events after it — instead of one.
-The split runs on the already-replayed ROOT, so you replay the full run
-once and separate it in seconds; no second replay. See
+**Splitting a run by target state (full vs empty).** When an empty-target
+run is taken *within* a production run (the cell is emptied or filled
+without stopping the DAQ), add a `split` block and `replay_filter`
+classifies every event by the target-cell pressure and writes the **full**
+and **empty** subsets to separate output files.  The split runs on the
+already-replayed ROOT, so you replay the full run once and separate it in
+seconds; no second replay. See
 [`cuts/split_target.json`](cuts/split_target.json) for a checked-in template.
 
 ```json
 "split": {
-  "channel":   "TGT:PRad:Cell_P",                       // PV to watch
-  "threshold": 1.0,                                     // single crossing, OR
-  "level_low": 0.2, "level_high": 2.0,                  //   hysteresis band
-  "guard":     { "mode": "checkpoints", "checkpoints": 2 },
-  "labels":    ["full", "empty"]
+  "channel": "TGT:PRad:Cell_P",   // PV to watch
+  "full":  500,                   // PV >= this  → full-target file
+  "empty": 5,                     // PV <= this  → empty-target file
+  "guard_checkpoints": 0,         // optional ± margin at each state edge
+  "labels": ["full", "empty"]     // output suffixes (defaults: full / empty)
 }
 ```
 
-- **Detection** — the first sustained crossing of `threshold` (the guard
-  supplies the deadband against bounce), or, with `level_low`/`level_high`,
-  a hysteresis band that latches only once the PV reaches the far level
-  (robust to a noisy channel).
-- **Guard band** — checkpoints around the crossing land in *neither* output,
-  so events taken while the PV is still ramping are dropped from both.
-  `"mode": "checkpoints"` drops `± checkpoints` slow-control points on each
-  side (checkpoints are ~regularly spaced, so this is effectively a time
-  guard); `"mode": "stability"` instead extends the guard outward until the
-  PV has settled within `epsilon` of each side's level for `consecutive`
-  readings.
-- **Outputs** — `<stem>_<labelA>.root` (before) and `<stem>_<labelB>.root`
-  (after), with matching `<stem>_<labelA>.report.json` reports.  Every other
-  configured cut (livetime / EPICS) still applies to each side, and each
-  side gets its own `live_charge` integral.  A row's `good` flag in a side
-  file is its overall verdict AND "belongs to this side", so running
-  `live_charge` on a side file reproduces that side's post-cut charge.  Drop
-  the other blocks for a pure split with no quality filtering.  If the PV
-  never crosses, side B is empty and a warning is printed.
+- **Classification** — every checkpoint is labelled by its forward-filled PV
+  reading: `PV >= full` is full-target, `PV <= empty` is empty-target,
+  anything in between (the ramp) or before the first reading is dropped.  The
+  thresholds must satisfy `full > empty`.  For the PRad-II gas target the
+  empty cell reads ~0 and the full cell ~640–1010 (run-dependent), so
+  `full: 500, empty: 5` separates the states robustly across run periods.
+- **Dead zone = guard** — the gap between `empty` and `full` is the guard
+  band: events taken while the cell is filling/emptying read an in-between
+  pressure and land in *neither* file.  `guard_checkpoints` optionally drops
+  an extra `± N` slow-control points at each state edge, for margin beyond
+  the dead zone (e.g. a fast transition that skips the dead zone between two
+  checkpoints).
+- **Stateless** — classification is per-checkpoint, so any number of
+  full↔empty transitions in one run are handled, and **a run that only ever
+  shows one state produces just that one file** (a pure full run →
+  `<stem>_full.root` only; the absent state is skipped with a notice).  The
+  same config can be run over a whole batch and each run self-sorts.
+- **Outputs** — `<stem>_full.root` / `<stem>_empty.root` (suffixes from
+  `labels`) with matching `<stem>_full.report.json` reports.  Every other
+  configured cut (livetime / EPICS) still applies to each state, and each
+  gets its own `live_charge` integral, physics/slow counts, and keep
+  intervals.  A row's `good` flag in a side file is its overall verdict AND
+  "belongs to this state", so running `live_charge` on a side file reproduces
+  that state's post-cut charge.  Drop the other blocks for a pure split with
+  no quality filtering.  If the PV never reaches either level, the split
+  degrades to the single default output with a warning.
 
 **Report (`-j`, default `<output_stem>.report.json`).** One JSON entry
 per (cut channel, checkpoint), each with `associated_evn`, the
@@ -191,10 +199,10 @@ count, and — when `charge` is configured — a `live_charge` block
 with `value_nC`, the accumulated live time, the beam-current channel
 name, and the count of integrated vs. skipped checkpoint pairs.
 Suitable for direct ingestion into a per-run quality dashboard.  When
-splitting, each side's report adds a `split` block (the transition
-event/timestamp, pre/post levels, guard mode, and per-side checkpoint
-counts) and its `live_charge`/`keep_intervals`/physics counts are for
-that side alone.
+splitting, each side's report adds a `split` block (the level thresholds,
+per-state checkpoint counts, and every full↔empty `transitions` entry with
+its event/timestamp) and its `summary` counts, `keep_intervals`, and
+`live_charge` are all for that target state alone.
 
 ### live_charge
 

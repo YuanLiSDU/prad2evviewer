@@ -1,14 +1,12 @@
 {
-    "_comment": "Example replay_filter cuts that SPLIT one DAQ run into two output files at a target-state transition — the empty-target / full-target case where the cell is emptied or filled mid-run without stopping the DAQ. The 'split' block names the slow-control PV to watch (the target cell pressure, TGT:PRad:Cell_P) and how to find the transition; replay_filter then writes <out>_<labelA>.root (before the transition) and <out>_<labelB>.root (after it), each with its own .report.json and live-charge integral. The split runs on the already-replayed ROOT, so you replay the full run once and split in seconds — no second replay. The other blocks (livetime/epics/charge) are the usual quality cuts and apply to BOTH sides; delete them for a pure split with no quality filtering. Set 'threshold' to a value between your empty and full Cell_P readings (or use 'level_low'/'level_high' for a hysteresis band, robust to a noisy PV). The guard band drops slow-control checkpoints around the crossing so events taken while the cell is still ramping land in NEITHER output: 'checkpoints' mode drops +/- N points (checkpoints are ~regularly spaced, so this is effectively a time guard); 'stability' mode instead extends the guard until the PV has settled within 'epsilon' of each side's level. labels[0] is the before-transition side, labels[1] the after.",
+    "_comment": "Example replay_filter cuts that SPLIT one DAQ run into full-target and empty-target output files by the target cell pressure (TGT:PRad:Cell_P) — the case where the cell is emptied or filled mid-run without stopping the DAQ. replay_filter classifies every event by its forward-filled Cell_P reading: PV >= 'full' goes to <out>_full.root, PV <= 'empty' goes to <out>_empty.root, and anything in between (the ramp) lands in neither. The split runs on the already-replayed ROOT, so you replay the full run once and separate it in seconds — no second replay. Classification is per-checkpoint and stateless, so any number of full<->empty transitions are handled, and a run that only ever shows one state writes just that one file (a pure full run -> only <out>_full.root; the absent state is skipped). The same config can be run over a whole batch and each run self-sorts. Real PRad-II values: the empty cell reads ~0 and the full cell ~640-1010 (run/energy dependent), so full=500/empty=5 separates the two states robustly across run periods (full MUST be > empty). The dead zone between 'empty' and 'full' is the guard band; set 'guard_checkpoints' > 0 to drop an extra +/- N slow-control points at each state edge for margin beyond the dead zone. labels[0] is the full-target suffix, labels[1] the empty-target suffix (defaults: full / empty). The other blocks (livetime/epics/charge) are the usual quality cuts and apply to BOTH states; delete them for a pure split with no quality filtering.",
 
     "split": {
-        "channel":   "TGT:PRad:Cell_P",
-        "threshold": 1.0,
-        "guard":     { "mode": "checkpoints", "checkpoints": 2 },
-        "labels":    ["full", "empty"],
-
-        "_hysteresis_alternative": "Replace 'threshold' with an explicit band when the PV is noisy near the crossing — the transition latches only when the reading reaches the far level: \"level_low\": 0.2, \"level_high\": 2.0",
-        "_stability_alternative":  "Replace the guard with: \"guard\": { \"mode\": \"stability\", \"epsilon\": 0.1, \"consecutive\": 3 } to drop the ramp by settle-band instead of a fixed point count."
+        "channel":           "TGT:PRad:Cell_P",
+        "full":              500,
+        "empty":             5,
+        "guard_checkpoints": 0,
+        "labels":            ["full", "empty"]
     },
 
     "livetime": {
