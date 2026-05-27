@@ -142,6 +142,44 @@ a checked-in template):
   with a missing input on either side are skipped, not zero-counted.
   The reported `live_charge.value_nC` is therefore in **nC** (nA·s).
 
+**Splitting a run at a PV transition.** When an empty-target run is taken
+*within* a production run (the cell is emptied or filled without stopping
+the DAQ), add a `split` block and `replay_filter` writes **two** output
+files — events before the transition and events after it — instead of one.
+The split runs on the already-replayed ROOT, so you replay the full run
+once and separate it in seconds; no second replay. See
+[`cuts/split_target.json`](cuts/split_target.json) for a checked-in template.
+
+```json
+"split": {
+  "channel":   "TGT:PRad:Cell_P",                       // PV to watch
+  "threshold": 1.0,                                     // single crossing, OR
+  "level_low": 0.2, "level_high": 2.0,                  //   hysteresis band
+  "guard":     { "mode": "checkpoints", "checkpoints": 2 },
+  "labels":    ["full", "empty"]
+}
+```
+
+- **Detection** — the first sustained crossing of `threshold` (the guard
+  supplies the deadband against bounce), or, with `level_low`/`level_high`,
+  a hysteresis band that latches only once the PV reaches the far level
+  (robust to a noisy channel).
+- **Guard band** — checkpoints around the crossing land in *neither* output,
+  so events taken while the PV is still ramping are dropped from both.
+  `"mode": "checkpoints"` drops `± checkpoints` slow-control points on each
+  side (checkpoints are ~regularly spaced, so this is effectively a time
+  guard); `"mode": "stability"` instead extends the guard outward until the
+  PV has settled within `epsilon` of each side's level for `consecutive`
+  readings.
+- **Outputs** — `<stem>_<labelA>.root` (before) and `<stem>_<labelB>.root`
+  (after), with matching `<stem>_<labelA>.report.json` reports.  Every other
+  configured cut (livetime / EPICS) still applies to each side, and each
+  side gets its own `live_charge` integral.  A row's `good` flag in a side
+  file is its overall verdict AND "belongs to this side", so running
+  `live_charge` on a side file reproduces that side's post-cut charge.  Drop
+  the other blocks for a pure split with no quality filtering.  If the PV
+  never crosses, side B is empty and a warning is printed.
+
 **Report (`-j`, default `<output_stem>.report.json`).** One JSON entry
 per (cut channel, checkpoint), each with `associated_evn`, the
 TI-tick-relative `associated_timestamp`, the EPICS-native `unix_time`
@@ -152,7 +190,11 @@ cut's robust centre, σ̂, MAD, gating channels, and post-gate sample
 count, and — when `charge` is configured — a `live_charge` block
 with `value_nC`, the accumulated live time, the beam-current channel
 name, and the count of integrated vs. skipped checkpoint pairs.
-Suitable for direct ingestion into a per-run quality dashboard.
+Suitable for direct ingestion into a per-run quality dashboard.  When
+splitting, each side's report adds a `split` block (the transition
+event/timestamp, pre/post levels, guard mode, and per-side checkpoint
+counts) and its `live_charge`/`keep_intervals`/physics counts are for
+that side alone.
 
 ### live_charge
 

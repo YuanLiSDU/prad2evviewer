@@ -30,12 +30,32 @@
 // σ̂ = 1.4826 · MAD (median absolute deviation).  MAD is robust to heavy
 // outliers (one bad reading does not pull the centre or width).
 //
-// Output ROOT file:
+// Optional "split" block — partition the run at a slow-control PV transition
+// (target cell pressure stepping empty<->full mid-run) into TWO outputs, the
+// events before the crossing (side A) and after it (side B), each still
+// subject to every other cut and each with its own report + charge.  A guard
+// band brackets the crossing so events taken while the PV ramps land in
+// neither side:
+//   "split": {
+//     "channel":  "TGT:PRad:Cell_P",   // EPICS channel to watch
+//     "threshold": 1.0,                 // single crossing, OR …
+//     "level_low": 0.2, "level_high": 2.0,   // … hysteresis band
+//     "guard": { "mode": "checkpoints", "checkpoints": 2 },  // OR
+//     "guard": { "mode": "stability", "epsilon": 0.1, "consecutive": 3 },
+//     "labels": ["full", "empty"]       // suffixes for the two files
+//   }
+//
+// Output ROOT file(s):
 //   * events / recon — same schema as input, only kept events
 //   * scalers / epics — concatenated from every input plus an extra
 //     `good` boolean branch per row reflecting that checkpoint's
-//     overall verdict (all cuts pass)
-// JSON report: see Phase 6 in the source for the full layout.
+//     overall verdict (all cuts pass); with split on, `good` also requires
+//     the row to belong to that file's side, so live_charge on a side file
+//     reproduces that side's post-cut charge directly.
+// With split on, two files <stem>_<labelA>.root / <stem>_<labelB>.root and
+// two matching reports are written instead of one.
+// JSON report: see the write phase in the source for the full layout (a
+// "split" block is added per side when run-splitting is active).
 //=============================================================================
 
 #include "EventData.h"
@@ -126,10 +146,53 @@ struct ChargeCfg {
     std::string beam_current_channel;   // EPICS channel name to read
 };
 
+// Run-splitting on a slow-control PV transition (e.g. target cell pressure
+// stepping between full and empty within one DAQ run).  When enabled the
+// filter detects the first sustained crossing of `channel` past `threshold`
+// (or, with `level_low`/`level_high` set, a hysteresis band) and writes TWO
+// output files instead of one — the events before the transition (side A)
+// and after it (side B), each still subject to every other configured cut
+// and each with its own charge integral.
+//
+// A guard band brackets the transition so events taken while the PV is still
+// ramping land in neither output.  Two guard modes:
+//   * "checkpoints" — drop `guard_checkpoints` slow-control points on each
+//     side of the crossing (cheap, predictable; checkpoints are ~regularly
+//     spaced so this is effectively a time guard).  This is the example.
+//   * "stability"   — keep extending the guard outward from the crossing
+//     until the PV has settled within `guard_epsilon` of each side's level
+//     for `guard_consecutive` consecutive readings.  Most faithful to the
+//     physical ramp when the settle time is not constant.
+struct SplitCfg {
+    bool        enabled  = false;
+    std::string channel;                       // EPICS channel to watch
+
+    // Detection.  If level_low/level_high are both set, use them as a
+    // hysteresis band (robust to noise); otherwise a single `threshold`
+    // crossing (with the guard supplying the deadband).
+    bool   has_threshold = false;
+    double threshold     = 0.0;
+    bool   has_levels    = false;
+    double level_low     = 0.0;
+    double level_high    = 0.0;
+
+    // Guard band around the crossing.
+    enum class Guard { Checkpoints, Stability };
+    Guard  guard            = Guard::Checkpoints;
+    int    guard_checkpoints = 2;              // ± N points (the example)
+    double guard_epsilon     = 0.0;            // "settled within" band
+    int    guard_consecutive = 3;              // K consecutive settled points
+
+    // Output labels appended to the stems of the two files / reports.
+    std::string label_a = "A";
+    std::string label_b = "B";
+};
+
 struct CutConfig {
     LivetimeCut                       livetime;
     std::map<std::string, ChannelCut> epics;
     ChargeCfg                         charge;
+    SplitCfg                          split;
     json                              raw;            // echoed in the report
 };
 
@@ -204,6 +267,55 @@ bool load_cuts(const std::string &path, CutConfig &cfg)
             cfg.charge.enabled = true;
             cfg.charge.beam_current_channel = cj["beam_current"].get<std::string>();
         }
+    }
+
+    // Run-splitting on a PV transition (opt-in: needs a `channel` plus either
+    // a `threshold` or a `level_low`/`level_high` hysteresis band).
+    if (j.contains("split") && j["split"].is_object()) {
+        const auto &sj = j["split"];
+        auto &s = cfg.split;
+        if (sj.contains("channel") && sj["channel"].is_string())
+            s.channel = sj["channel"].get<std::string>();
+        if (sj.contains("threshold") && sj["threshold"].is_number()) {
+            s.has_threshold = true;
+            s.threshold     = sj["threshold"].get<double>();
+        }
+        if (sj.contains("level_low")  && sj["level_low"].is_number() &&
+            sj.contains("level_high") && sj["level_high"].is_number()) {
+            s.has_levels  = true;
+            s.level_low   = sj["level_low"].get<double>();
+            s.level_high  = sj["level_high"].get<double>();
+            if (s.level_low > s.level_high) std::swap(s.level_low, s.level_high);
+            // A single threshold midway between the levels is the fallback
+            // crossing test when hysteresis can't latch (e.g. PV starts
+            // inside the band).
+            if (!s.has_threshold) {
+                s.has_threshold = true;
+                s.threshold     = 0.5 * (s.level_low + s.level_high);
+            }
+        }
+        if (sj.contains("guard") && sj["guard"].is_object()) {
+            const auto &gj = sj["guard"];
+            std::string mode = gj.value("mode", "checkpoints");
+            s.guard = (mode == "stability") ? SplitCfg::Guard::Stability
+                                            : SplitCfg::Guard::Checkpoints;
+            if (gj.contains("checkpoints") && gj["checkpoints"].is_number())
+                s.guard_checkpoints = gj["checkpoints"].get<int>();
+            if (gj.contains("epsilon") && gj["epsilon"].is_number())
+                s.guard_epsilon = gj["epsilon"].get<double>();
+            if (gj.contains("consecutive") && gj["consecutive"].is_number())
+                s.guard_consecutive = gj["consecutive"].get<int>();
+        }
+        if (sj.contains("labels") && sj["labels"].is_array()
+            && sj["labels"].size() >= 2) {
+            s.label_a = sj["labels"][0].get<std::string>();
+            s.label_b = sj["labels"][1].get<std::string>();
+        }
+        // Need both a channel and a way to detect the crossing.
+        s.enabled = !s.channel.empty() && s.has_threshold;
+        if (!s.channel.empty() && !s.has_threshold)
+            std::cerr << "replay_filter: split.channel set but no threshold / "
+                         "level_low+level_high — split disabled\n";
     }
     return true;
 }
@@ -727,6 +839,9 @@ int run(const std::vector<std::string> &input_files,
         double  live_fraction;   // [0, 1] from cur_lt/100, NaN if unset
         double  beam_current;    // forward-filled, NaN if not seen yet
         bool    overall_pass;
+        double  split_pv;        // forward-filled split channel, NaN if unset
+        bool    is_scaler;       // true ⇒ orig indexes `scalers`, else `epics`
+        size_t  orig;            // load-order index into the source vector
     };
     std::vector<Checkpoint>  timeline;
     std::vector<ReportPoint> report_points;
@@ -840,88 +955,211 @@ int run(const std::vector<std::string> &input_files,
             auto it = cur_eps.find(cuts.charge.beam_current_channel);
             if (it != cur_eps.end()) cp_current = it->second;
         }
+        // Split PV (forward-filled like the others) so the transition scan
+        // below sees a dense trace even on checkpoints carrying no update.
+        double cp_split_pv = std::numeric_limits<double>::quiet_NaN();
+        if (cuts.split.enabled) {
+            auto it = cur_eps.find(cuts.split.channel);
+            if (it != cur_eps.end()) cp_split_pv = it->second;
+        }
 
         timeline.push_back({cp_evn, cp_unix, cp_ticks,
-                            cp_live_fraction, cp_current, overall});
+                            cp_live_fraction, cp_current, overall,
+                            cp_split_pv, is_sc, orig});
         if (is_sc) scaler_verdict[orig] = overall;
         else       epics_verdict [orig] = overall;
     }
 
-    // ---------- Phase 4: build keep-intervals (lo, hi] ----------
-    // Same loop integrates live charge over each kept pair, using the
-    // right-endpoint live fraction (matches the rate-ending-at-endpoint
-    // convention used for `compute_delta_live_pct`) and the average of
-    // the two endpoints' beam currents.  Only pairs where every input
-    // is finite contribute — missing data on either side is treated as
-    // unknown, not zero.
-    //
-    // Both gated and ungated charge are accumulated in the same pass:
-    //   * gated (live_charge / live_charge_secs / real_secs) — only
-    //     adjacent pairs where both endpoints' overall_pass is true.
-    //     This is the canonical post-cut number and matches the
-    //     keep-interval physics events written to the output ROOT file.
-    //   * ungated (ungated_*) — every valid-data pair, ignoring the cut
-    //     verdict.  Reported alongside so users can see how much charge
-    //     the cuts threw away (= live_charge when no cuts reject any
-    //     point).
-    std::vector<std::pair<int32_t, int32_t>> keep;
-    double live_charge              = 0.0;
-    double live_charge_secs         = 0.0;
-    double real_secs                = 0.0;
-    double ungated_live_charge      = 0.0;
-    double ungated_live_charge_secs = 0.0;
-    double ungated_real_secs        = 0.0;
-    int    n_charge_pairs           = 0;
-    int    n_charge_skipped         = 0;
-    int    n_ungated_charge_pairs   = 0;
-    int    n_ungated_charge_skipped = 0;
+    // ---------- Phase 5: detect the split transition, label each side ----------
+    // When `split` is enabled the run is partitioned into side A (before the
+    // PV transition) and side B (after it), with a guard band around the
+    // crossing whose checkpoints land in neither side.  `side[k]` ∈ {0, 1}
+    // for A/B, or −1 for guard/excluded; with split off it is 0 everywhere,
+    // so the keep/charge/output code below is one code path that simply runs
+    // once (n_sides == 1) or twice (n_sides == 2).
+    const int n_sides = cuts.split.enabled ? 2 : 1;
+    std::vector<int> side(timeline.size(), 0);
+    std::vector<int> scaler_side(scalers.size(), 0);
+    std::vector<int> epics_side (epics_rows.size(), 0);
+
+    bool   split_found     = false;
+    int    split_cross_idx = -1;            // first B-side checkpoint
+    int    guard_lo = (int)timeline.size(); // [guard_lo, guard_hi) = excluded
+    int    guard_hi = (int)timeline.size();
+    int32_t split_cross_evn = -1;
+    double  split_cross_t   = std::numeric_limits<double>::quiet_NaN();
+    double  split_pre_level = std::numeric_limits<double>::quiet_NaN();
+    double  split_post_level= std::numeric_limits<double>::quiet_NaN();
+
+    if (cuts.split.enabled) {
+        const auto &S = cuts.split;
+        // First checkpoint that actually carries a PV reading.
+        size_t first_valid = timeline.size();
+        for (size_t i = 0; i < timeline.size(); ++i)
+            if (std::isfinite(timeline[i].split_pv)) { first_valid = i; break; }
+
+        if (first_valid < timeline.size()) {
+            const double v0 = timeline[first_valid].split_pv;
+            split_pre_level = v0;
+            const bool start_high = (v0 >= S.threshold);
+            // Raw crossing: first checkpoint definitively on the far side.
+            // With a hysteresis band the PV must actually reach the opposite
+            // level; with a bare threshold a single crossing suffices (the
+            // guard supplies the deadband against bounce).
+            for (size_t i = first_valid; i < timeline.size(); ++i) {
+                const double v = timeline[i].split_pv;
+                if (!std::isfinite(v)) continue;
+                bool now_far;
+                if (S.has_levels)
+                    now_far = start_high ? (v <= S.level_low) : (v >= S.level_high);
+                else
+                    now_far = start_high ? (v <  S.threshold) : (v >= S.threshold);
+                if (now_far) { split_cross_idx = (int)i; break; }
+            }
+        }
+
+        if (split_cross_idx >= 0) {
+            split_found     = true;
+            split_cross_evn = timeline[split_cross_idx].event_number;
+            split_post_level= timeline[split_cross_idx].split_pv;
+            if (timeline[split_cross_idx].ti_ticks > 0 && anchor_set)
+                split_cross_t = (timeline[split_cross_idx].ti_ticks - ti_anchor)
+                                * TI_TICK_SEC;
+
+            if (S.guard == SplitCfg::Guard::Checkpoints) {
+                const int N = std::max(0, S.guard_checkpoints);
+                guard_lo = std::max(0, split_cross_idx - N);
+                guard_hi = std::min((int)timeline.size(), split_cross_idx + N);
+            } else {
+                // Stability: extend the guard outward from the crossing until
+                // the PV has settled within ε of each side's level.  pre_level
+                // is the run's starting value; post_level is the value at the
+                // crossing.  Symmetric ε band on both sides.
+                const double eps = S.guard_epsilon;
+                const double pre = split_pre_level, post = split_post_level;
+                int lo = split_cross_idx, hi = split_cross_idx;
+                // walk left: last A-side checkpoint still settled at `pre`
+                for (int i = split_cross_idx - 1; i >= 0; --i) {
+                    const double v = timeline[i].split_pv;
+                    if (std::isfinite(v) && std::fabs(v - pre) <= eps) { lo = i + 1; break; }
+                    if (i == 0) lo = 0;
+                }
+                // walk right: first B-side checkpoint settled at `post`
+                for (int i = split_cross_idx; i < (int)timeline.size(); ++i) {
+                    const double v = timeline[i].split_pv;
+                    if (std::isfinite(v) && std::fabs(v - post) <= eps) { hi = i; break; }
+                    if (i == (int)timeline.size() - 1) hi = (int)timeline.size();
+                }
+                guard_lo = std::max(0, lo);
+                guard_hi = std::min((int)timeline.size(), std::max(hi, lo));
+            }
+        } else {
+            std::cerr << "replay_filter: split channel '" << cuts.split.channel
+                      << "' never crossed the configured threshold — side B "
+                         "will be empty (no transition seen in this input)\n";
+        }
+
+        // Label every checkpoint, then back-map to load-order rows so the
+        // scaler/epics writers can tag each row with its side.
+        for (size_t k = 0; k < timeline.size(); ++k) {
+            int sd;
+            if      ((int)k <  guard_lo) sd = 0;   // before the ramp → A
+            else if ((int)k >= guard_hi) sd = 1;   // after the ramp  → B
+            else                         sd = -1;  // inside the guard → drop
+            side[k] = sd;
+            if (timeline[k].is_scaler) scaler_side[timeline[k].orig] = sd;
+            else                       epics_side [timeline[k].orig] = sd;
+        }
+    }
+
+    // ---------- Phase 5: build per-side keep-intervals (lo, hi] + charge ----------
+    // A pair (cp_{i-1}, cp_i) belongs to a side only when both endpoints carry
+    // the same non-guard label; pairs that straddle the transition or touch
+    // the guard contribute to neither output (those events are dropped).  The
+    // charge integration is the same arithmetic as before, bucketed per side:
+    //   * gated (live_charge[s]) — both endpoints overall_pass.  Canonical
+    //     post-cut number; matches the events written to that side's file.
+    //   * ungated (ungated_*[s]) — every valid-data pair on side s regardless
+    //     of the cut verdict, so users see how much charge the cuts dropped.
+    std::vector<std::pair<int32_t, int32_t>> keep[2];
+    double live_charge[2]              = {0, 0};
+    double live_charge_secs[2]         = {0, 0};
+    double real_secs[2]                = {0, 0};
+    double ungated_live_charge[2]      = {0, 0};
+    double ungated_live_charge_secs[2] = {0, 0};
+    double ungated_real_secs[2]        = {0, 0};
+    int    n_charge_pairs[2]           = {0, 0};
+    int    n_charge_skipped[2]         = {0, 0};
+    int    n_ungated_charge_pairs[2]   = {0, 0};
+    int    n_ungated_charge_skipped[2] = {0, 0};
     for (size_t i = 1; i < timeline.size(); ++i) {
         const auto &a = timeline[i - 1];
         const auto &b = timeline[i];
+        const int sa = side[i - 1], sb = side[i];
+        const int ps = (sa >= 0 && sa == sb) ? sa : -1;   // pair's side, or none
+        if (ps < 0) continue;                              // straddles / guard
         const bool good_pair = (a.overall_pass && b.overall_pass);
         if (good_pair)
-            keep.emplace_back(a.event_number, b.event_number);
+            keep[ps].emplace_back(a.event_number, b.event_number);
         if (!cuts.charge.enabled) continue;
         const bool data_ok = !(a.ti_ticks <= 0 || b.ti_ticks <= 0 || b.ti_ticks <= a.ti_ticks
             || !std::isfinite(b.live_fraction) || b.live_fraction < 0
             || !std::isfinite(a.beam_current)  || !std::isfinite(b.beam_current));
         if (!data_ok) {
-            if (good_pair) ++n_charge_skipped;
-            ++n_ungated_charge_skipped;
+            if (good_pair) ++n_charge_skipped[ps];
+            ++n_ungated_charge_skipped[ps];
             continue;
         }
         const double dt = (b.ti_ticks - a.ti_ticks) * TI_TICK_SEC;
         const double I  = 0.5 * (a.beam_current + b.beam_current);
         const double dQ = b.live_fraction * dt * I;
         const double dL = b.live_fraction * dt;
-        ungated_live_charge      += dQ;
-        ungated_live_charge_secs += dL;
-        ungated_real_secs        += dt;
-        ++n_ungated_charge_pairs;
+        ungated_live_charge[ps]      += dQ;
+        ungated_live_charge_secs[ps] += dL;
+        ungated_real_secs[ps]        += dt;
+        ++n_ungated_charge_pairs[ps];
         if (good_pair) {
-            live_charge      += dQ;
-            live_charge_secs += dL;
-            real_secs        += dt;
-            ++n_charge_pairs;
+            live_charge[ps]      += dQ;
+            live_charge_secs[ps] += dL;
+            real_secs[ps]        += dt;
+            ++n_charge_pairs[ps];
         }
     }
-    auto is_kept = [&](int32_t evn) -> bool {
-        if (keep.empty()) return false;
+    auto is_kept = [&](int s, int32_t evn) -> bool {
+        const auto &kk = keep[s];
+        if (kk.empty()) return false;
         auto it = std::upper_bound(
-            keep.begin(), keep.end(), evn,
+            kk.begin(), kk.end(), evn,
             [](int32_t e, const std::pair<int32_t, int32_t> &p) { return e < p.first; });
-        if (it == keep.begin()) return false;
+        if (it == kk.begin()) return false;
         --it;
         return evn > it->first && evn <= it->second;
     };
 
-    // ---------- Phase 6: write the output ROOT file ----------
-    // ev_tree_name was detected in phase 3 above.
+    // ---------- Phase 6: write the output(s) — one ROOT file + report per side ----------
+    // ev_tree_name was detected in phase 3 above.  `write_side` does the whole
+    // job for one side; with split off it runs once (side 0 → output_path),
+    // with split on it runs twice with the file/report stems suffixed by the
+    // side labels.  A row's `good` flag in a side's slow trees is its overall
+    // verdict AND-ed with "belongs to this side", so running live_charge on a
+    // side file reproduces that side's post-cut charge directly.
     const bool is_recon = (ev_tree_name == "recon");
 
-    std::unique_ptr<TFile> out(TFile::Open(output_path.c_str(), "RECREATE"));
+    // Checkpoints per side / in the guard band — reported in the split block.
+    int n_cp_side[2] = {0, 0}, n_cp_guard = 0;
+    for (int sd : side) { if (sd < 0) ++n_cp_guard; else ++n_cp_side[sd]; }
+
+    auto fmt_pct = [](double r) {
+        std::ostringstream o;
+        o << std::fixed << std::setprecision(2) << (r * 100.0) << "%";
+        return o.str();
+    };
+
+    auto write_side = [&](int s, const std::string &outp,
+                          const std::string &repp) -> int {
+    std::unique_ptr<TFile> out(TFile::Open(outp.c_str(), "RECREATE"));
     if (!out || out->IsZombie()) {
-        std::cerr << "replay_filter: cannot create " << output_path << "\n";
+        std::cerr << "replay_filter: cannot create " << outp << "\n";
         return 1;
     }
 
@@ -974,7 +1212,7 @@ int run(const std::vector<std::string> &input_files,
                 ev.tdc_nwords.clear();
                 ev.tdc_words.clear();
                 t->GetEntry(i);
-                if (is_kept(ev.event_num)) {
+                if (is_kept(s, ev.event_num)) {
                     out->cd();
                     out_ev->Fill();
                     ++n_out;
@@ -1001,7 +1239,7 @@ int run(const std::vector<std::string> &input_files,
             for (Long64_t i = 0; i < n; ++i) {
                 ev.ssp_raw.clear();
                 t->GetEntry(i);
-                if (is_kept(ev.event_num)) {
+                if (is_kept(s, ev.event_num)) {
                     out->cd();
                     out_ev->Fill();
                     ++n_out;
@@ -1033,11 +1271,14 @@ int run(const std::vector<std::string> &input_files,
             for (Long64_t i = 0; i < n; ++i) {
                 t->GetEntry(i);
                 good = (seq < scaler_verdict.size()) ? scaler_verdict[seq] : false;
+                if (good && n_sides > 1)
+                    good = (seq < scaler_side.size() && scaler_side[seq] == s);
                 ++seq;
                 out->cd();
                 out_sc->Fill();
             }
         }
+        out->cd();
         out_sc->Write();
     }
 
@@ -1083,11 +1324,14 @@ int run(const std::vector<std::string> &input_files,
                         ep.ti_ticks_at_arrival = eit->second;
                 }
                 good = (seq < epics_verdict.size()) ? epics_verdict[seq] : false;
+                if (good && n_sides > 1)
+                    good = (seq < epics_side.size() && epics_side[seq] == s);
                 ++seq;
                 out->cd();
                 out_ep->Fill();
             }
         }
+        out->cd();
         out_ep->Write();
     }
 
@@ -1115,6 +1359,7 @@ int run(const std::vector<std::string> &input_files,
                 out_ri->Fill();
             }
         }
+        out->cd();
         out_ri->Write();
     }
 
@@ -1151,16 +1396,16 @@ int run(const std::vector<std::string> &input_files,
     json report;
     report["run_number"]   = run_number;
     report["input_files"]  = input_files;
-    report["output_file"]  = output_path;
+    report["output_file"]  = outp;
     report["cuts"]         = cuts.raw;
     report["robust_method"] = "mad";   // 1.4826 * MAD as σ̂
 
     json stats = json::object();
     if (cuts.livetime.enabled) {
-        json s = stats_for(cuts.livetime.cut);
-        s["source"]  = cuts.livetime.source;
-        s["channel"] = cuts.livetime.channel;
-        stats["livetime"] = std::move(s);
+        json ls = stats_for(cuts.livetime.cut);
+        ls["source"]  = cuts.livetime.source;
+        ls["channel"] = cuts.livetime.channel;
+        stats["livetime"] = std::move(ls);
     }
     for (const auto &kv : cuts.epics)
         stats["epics:" + kv.first] = stats_for(kv.second);
@@ -1169,7 +1414,7 @@ int run(const std::vector<std::string> &input_files,
     int n_pass_cp = 0, n_fail_cp = 0;
     for (const auto &cp : timeline) (cp.overall_pass ? n_pass_cp : n_fail_cp)++;
     json keep_intervals = json::array();
-    for (const auto &p : keep) keep_intervals.push_back({p.first, p.second});
+    for (const auto &p : keep[s]) keep_intervals.push_back({p.first, p.second});
 
     // Per-channel breakdown — number of slow-event checkpoints where this
     // channel's cut accepted vs rejected the value.  Helps the user see
@@ -1209,11 +1454,51 @@ int run(const std::vector<std::string> &input_files,
         {"physics_pass_rate",  n_in_total > 0
                                 ? double(n_pass_phys) / double(n_in_total) : 0.0},
         // Keep-interval count (each is a (lo, hi] range of accepted events).
-        {"n_keep_intervals",   (int)keep.size()},
+        {"n_keep_intervals",   (int)keep[s].size()},
         // Per-cut breakdown — which channel rejected how often.
         {"per_channel",        per_channel_json},
     };
     report["keep_intervals"] = std::move(keep_intervals);
+
+    // Split metadata — present only when run-splitting is active.  Records
+    // the transition this side was cut at, plus how many checkpoints landed
+    // in each side and in the guard band, so every side file is self-
+    // describing without needing the other side's report.
+    if (cuts.split.enabled) {
+        json sp = {
+            {"enabled",             true},
+            {"channel",             cuts.split.channel},
+            {"side",                s},
+            {"label",               s == 0 ? cuts.split.label_a : cuts.split.label_b},
+            {"role",                s == 0 ? "before_transition" : "after_transition"},
+            {"transition_found",    split_found},
+            {"guard_mode",          cuts.split.guard == SplitCfg::Guard::Stability
+                                     ? "stability" : "checkpoints"},
+            {"n_checkpoints_side",  n_cp_side[s]},
+            {"n_checkpoints_guard", n_cp_guard},
+        };
+        if (cuts.split.has_levels) {
+            sp["level_low"]  = cuts.split.level_low;
+            sp["level_high"] = cuts.split.level_high;
+        }
+        if (cuts.split.has_threshold) sp["threshold"] = cuts.split.threshold;
+        if (cuts.split.guard == SplitCfg::Guard::Checkpoints) {
+            sp["guard_checkpoints"] = cuts.split.guard_checkpoints;
+        } else {
+            sp["guard_epsilon"]     = cuts.split.guard_epsilon;
+            sp["guard_consecutive"] = cuts.split.guard_consecutive;
+        }
+        if (split_found) {
+            sp["transition_evn"]       = split_cross_evn;
+            sp["transition_timestamp"] = std::isnan(split_cross_t)
+                                          ? json(nullptr) : json(split_cross_t);
+            sp["pre_level"]            = std::isnan(split_pre_level)
+                                          ? json(nullptr) : json(split_pre_level);
+            sp["post_level"]           = std::isnan(split_post_level)
+                                          ? json(nullptr) : json(split_post_level);
+        }
+        report["split"] = std::move(sp);
+    }
 
     // Live-charge integration over kept intervals.  Units: assume the
     // configured EPICS beam-current channel publishes in nA (true for
@@ -1231,19 +1516,19 @@ int run(const std::vector<std::string> &input_files,
     // gated values.
     if (cuts.charge.enabled) {
         report["live_charge"] = {
-            {"value_nC",                   live_charge},
+            {"value_nC",                   live_charge[s]},
             {"unit",                       "nC"},
             {"beam_current_channel",       cuts.charge.beam_current_channel},
             {"beam_current_unit",          "nA"},
-            {"live_seconds",               live_charge_secs},
-            {"real_seconds",               real_secs},
-            {"ungated_value_nC",           ungated_live_charge},
-            {"ungated_live_seconds",       ungated_live_charge_secs},
-            {"ungated_real_seconds",       ungated_real_secs},
-            {"n_pairs_integrated",         n_charge_pairs},
-            {"n_pairs_skipped",            n_charge_skipped},
-            {"n_ungated_pairs_integrated", n_ungated_charge_pairs},
-            {"n_ungated_pairs_skipped",    n_ungated_charge_skipped},
+            {"live_seconds",               live_charge_secs[s]},
+            {"real_seconds",               real_secs[s]},
+            {"ungated_value_nC",           ungated_live_charge[s]},
+            {"ungated_live_seconds",       ungated_live_charge_secs[s]},
+            {"ungated_real_seconds",       ungated_real_secs[s]},
+            {"n_pairs_integrated",         n_charge_pairs[s]},
+            {"n_pairs_skipped",            n_charge_skipped[s]},
+            {"n_ungated_pairs_integrated", n_ungated_charge_pairs[s]},
+            {"n_ungated_pairs_skipped",    n_ungated_charge_skipped[s]},
         };
     }
 
@@ -1266,31 +1551,32 @@ int run(const std::vector<std::string> &input_files,
     }
     report["points"] = std::move(pts);
 
-    std::ofstream of(report_path);
+    std::ofstream of(repp);
     if (!of) {
-        std::cerr << "replay_filter: cannot write " << report_path << "\n";
+        std::cerr << "replay_filter: cannot write " << repp << "\n";
         return 1;
     }
     of << report.dump(2) << "\n";
 
-    std::cerr << "replay_filter: report written to " << report_path << "\n";
-    std::cerr << "replay_filter: output ROOT     " << output_path << "\n";
-    auto fmt_pct = [](double r) {
-        std::ostringstream o;
-        o << std::fixed << std::setprecision(2) << (r * 100.0) << "%";
-        return o.str();
-    };
+    const std::string tag = (n_sides > 1)
+        ? "[" + (s == 0 ? cuts.split.label_a : cuts.split.label_b) + "] " : "";
+    std::cerr << "replay_filter: " << tag << "report written to " << repp << "\n";
+    std::cerr << "replay_filter: " << tag << "output ROOT     " << outp << "\n";
     std::cerr << "  slow events  : " << n_slow
               << "  pass=" << n_pass_cp << "  reject=" << n_fail_cp
               << "  rate=" << fmt_pct(n_slow > 0 ? double(n_pass_cp) / n_slow : 0)
               << "\n";
-    std::cerr << "  keep intervals: " << keep.size() << "\n";
+    std::cerr << "  keep intervals: " << keep[s].size() << "\n";
     std::cerr << "  physics      : in=" << n_in_total
               << "  pass="  << n_pass_phys
               << "  reject=" << n_rej_phys
               << "  rate=" << fmt_pct(n_in_total > 0
                                        ? double(n_pass_phys) / n_in_total : 0)
               << "\n";
+    if (cuts.charge.enabled)
+        std::cerr << "  live charge  : " << std::fixed << std::setprecision(3)
+                  << live_charge[s] << " nC over " << live_charge_secs[s]
+                  << " s live" << std::defaultfloat << "\n";
     if (!per_channel.empty()) {
         std::cerr << "  per-channel reject:\n";
         for (const auto &kv : per_channel) {
@@ -1304,6 +1590,40 @@ int run(const std::vector<std::string> &input_files,
         }
     }
     return 0;
+    };   // end write_side
+
+    // ---------- Dispatch: one output, or two split at the transition ----------
+    if (n_sides == 1)
+        return write_side(0, output_path, report_path);
+
+    // Suffix the file/report stems with the side labels.  Handles the
+    // compound ".report.json" suffix so a report becomes
+    // "<stem>_<label>.report.json" rather than "<stem>.report_<label>.json".
+    auto with_label = [](const std::string &path, const std::string &label) {
+        static const std::vector<std::string> compound = {".report.json"};
+        for (const auto &suf : compound) {
+            if (path.size() > suf.size() &&
+                path.compare(path.size() - suf.size(), suf.size(), suf) == 0)
+                return path.substr(0, path.size() - suf.size())
+                       + "_" + label + suf;
+        }
+        auto dot = path.rfind('.');
+        return (dot == std::string::npos)
+            ? path + "_" + label
+            : path.substr(0, dot) + "_" + label + path.substr(dot);
+    };
+    std::cerr << "replay_filter: split on '" << cuts.split.channel
+              << "' → side " << cuts.split.label_a << " (before) + side "
+              << cuts.split.label_b << " (after)";
+    if (split_found) std::cerr << ", transition at event " << split_cross_evn;
+    else             std::cerr << " — NO transition detected, side "
+                               << cuts.split.label_b << " will be empty";
+    std::cerr << "\n";
+    int rc = write_side(0, with_label(output_path, cuts.split.label_a),
+                           with_label(report_path, cuts.split.label_a));
+    if (rc) return rc;
+    return write_side(1, with_label(output_path, cuts.split.label_b),
+                          with_label(report_path, cuts.split.label_b));
 }
 
 void usage(const char *prog)
@@ -1317,6 +1637,12 @@ void usage(const char *prog)
         "and the full scaler/epics streams concatenated, plus a JSON report\n"
         "with per-(cut, slow-event) pass/fail status for chart plotting.\n"
         "\n"
+        "With a \"split\" block the run is instead partitioned at a PV\n"
+        "transition (e.g. target cell pressure stepping empty<->full) into\n"
+        "TWO files <stem>_<labelA>.root and <stem>_<labelB>.root, each with\n"
+        "its own report and live-charge integral; a guard band brackets the\n"
+        "crossing so ramp events land in neither.\n"
+        "\n"
         "Cut JSON example:\n"
         "  {\n"
         "    \"livetime\": { \"source\": \"ref\", \"abs\": { \"min\": 90 } },\n"
@@ -1324,8 +1650,16 @@ void usage(const char *prog)
         "      \"hallb_IPM2C21A_CUR\":  { \"abs\": { \"min\": 3 } },\n"
         "      \"hallb_IPM2C21A_XPOS\": { \"rel_rms\": 3 },\n"
         "      \"hallb_IPM2C21A_YPOS\": { \"rel_rms\": 3 }\n"
+        "    },\n"
+        "    \"split\": {\n"
+        "      \"channel\": \"TGT:PRad:Cell_P\", \"threshold\": 1.0,\n"
+        "      \"guard\": { \"mode\": \"checkpoints\", \"checkpoints\": 2 },\n"
+        "      \"labels\": [\"full\", \"empty\"]\n"
         "    }\n"
-        "  }\n";
+        "  }\n"
+        "  (split detection: a single \"threshold\", or a \"level_low\"+\n"
+        "   \"level_high\" hysteresis band.  guard mode: \"checkpoints\" (+/- N\n"
+        "   points) or \"stability\" (\"epsilon\"+\"consecutive\").)\n";
 }
 
 } // anonymous namespace
