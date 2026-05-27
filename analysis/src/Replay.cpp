@@ -1054,6 +1054,19 @@ bool Replay::Process_LMSgainFactor(const std::string &input_evio, const std::str
     TTree *tree = new TTree("lms_gain", "LMS gain factor calculation");
     setupLMSBranches(tree, *ev);
 
+    // Side trees — see Process() above for the design.  The recon path
+    // writes the same scalers / epics records so analysis joining keeps
+    // working regardless of which replay output the user opens.
+    TTree *scalers_tree = new TTree("scalers", "PRad2 DSC2 scaler readouts");
+    TTree *epics_tree   = new TTree("epics",   "PRad2 EPICS slow control");
+    TTree *runinfo_tree = new TTree("runinfo", "PRad2 control events / DAQ config");
+    auto sc_row = std::make_unique<prad2::RawScalerData>();
+    auto ep_row = std::make_unique<prad2::RawEpicsData>();
+    auto ri_row = std::make_unique<prad2::RawRunInfo>();
+    prad2::SetScalerWriteBranches (scalers_tree, *sc_row);
+    prad2::SetEpicsWriteBranches  (epics_tree,   *ep_row);
+    prad2::SetRunInfoWriteBranches(runinfo_tree, *ri_row);
+
     auto event = std::make_unique<fdec::EventData>();
     fdec::WaveAnalyzer ana(daq_cfg_.wave_cfg);
     // NNLS pile-up template store (loaded only if config asks for it;
@@ -1076,13 +1089,42 @@ bool Replay::Process_LMSgainFactor(const std::string &input_evio, const std::str
     while (ch.Read() == evc::status::success) {
         if (!ch.Scan()) continue;
 
+        // Slow-control side trees (see Process() for the rationale).
         const auto et = ch.GetEventType();
-    
+        if (et == evc::EventType::Prestart ||
+            et == evc::EventType::Go       ||
+            et == evc::EventType::End)
+        {
+            std::string cfg_text;
+            if (et == evc::EventType::Prestart)
+                cfg_text = ch.ExtractDaqConfigText();
+            prad2::FillRunInfoRow(ch.Sync(), cfg_text, *ri_row);
+            runinfo_tree->Fill();
+            continue;
+        }
+        if (et == evc::EventType::Epics) {
+            const auto &rec = ch.Epics();
+            if (rec.present) {
+                prad2::FillEpicsRow(rec, *ep_row);
+                epics_tree->Fill();
+            }
+            continue;
+        }
         if (et != evc::EventType::Physics) continue;
 
         for (int ie = 0; ie < ch.GetNEvents(); ++ie) {
             event->clear();
             if (!ch.DecodeEvent(ie, *event, nullptr)) continue;
+
+            // DSC2 row: same logic as the raw-replay path.  See Process().
+            if (ie == 0) {
+                const auto &dsc = ch.Dsc();
+                if (dsc.present) {
+                    prad2::FillScalerRow(dsc, ch.Sync(), event->info,
+                                         daq_cfg_.dsc_scaler, *sc_row);
+                    scalers_tree->Fill();
+                }
+            }
 
             clearLMSEvent(*ev);
             ev->event_num    = event->info.event_number;
@@ -1154,6 +1196,9 @@ bool Replay::Process_LMSgainFactor(const std::string &input_evio, const std::str
     std::cerr << "\rReplay: " << total << " events written to " << output_root << "\n";
     outfile->cd();
     tree->Write();
+    scalers_tree->Write();
+    epics_tree->Write();
+    runinfo_tree->Write();
     delete outfile;
     return true;
 }
