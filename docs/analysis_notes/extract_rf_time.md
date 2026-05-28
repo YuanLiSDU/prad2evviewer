@@ -200,7 +200,38 @@ dt = arr["cl_dt_rf"][mask, 0]
 dt = dt[np.isfinite(dt)]
 # Folded onto (-2.004, 2.004) — a Gaussian peak means timing resolution
 # is better than the 4.008 ns CEBAF RF period.
+
+# Apply the timing cut.  Width is per-crystal: PWO σ_t ~0.7 ns (use ±1.5 ns
+# ≈ 2σ), PbGlass is wider — leave it loose until per-module fits stabilize.
+# Always `isfinite` first: NaN means "no RF tick this event", not "Δt=0".
+in_time = np.isfinite(dt) & (np.abs(dt) < 1.5)
 ```
+
+Equivalent in a C++ ROOT loop:
+
+```cpp
+prad2::ReconEventData ev;
+prad2::SetReconReadBranches(t, ev);
+for (Long64_t i = 0; i < t->GetEntries(); ++i) {
+    t->GetEntry(i);
+    if (ev.rf_n_a == 0) continue;                       // no RF this event
+    for (int k = 0; k < ev.n_clusters; ++k) {
+        const float dt = ev.cl_dt_rf[k];
+        if (!std::isfinite(dt)) continue;               // NaN guard
+        // PWO ≈ ±1.5 ns (≈2σ); widen for PbGlass until calibrated.
+        if (std::abs(dt) > 1.5f) continue;
+        // ... use the in-time cluster (ev.cl_x[k], ev.cl_energy[k], …)
+    }
+}
+```
+
+The cut width is *not* hard-coded in the recon — `cl_dt_rf` is stored at
+its natural folded range (−T_RF/2, T_RF/2] so different analyses can
+pick different working points. A 3σ PWO cut is ≈ ±2 ns which already
+brushes the wrap-around, so going tighter than ~±1.5 ns is the usual
+sweet spot for PWO. For mixed PWO+PbGlass selections, split on
+`cl_center` (PWO ids ≥ 1000, PbGlass < 1000) and use a wider window for
+the latter.
 
 The C++ macro `analysis/scripts/rf_time_plot.C` produces a four-panel
 QC PDF showing the folded distribution vs the unfolded one (mod 131 ns)
