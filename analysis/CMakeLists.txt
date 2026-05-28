@@ -65,11 +65,13 @@ add_analysis_tool(gain_fitter tools/gain_fitter.cpp)
 add_analysis_tool(refGain_produce tools/refGain_produce.cpp)
 add_analysis_tool(sim2replay tools/sim2replay.cpp)
 add_analysis_tool(cosmic_lg tools/cosmic_lg.cpp)
+add_analysis_tool(hycal_rf_offset_calib tools/hycal_rf_offset_calib.cpp)
 
 install(TARGETS replay_rawdata replay_gainCorr replay_recon replay_filter replay_add_hv
                 live_charge epCalib
                 cosmic_test quick_check matching det_calib cosmic_lg sim2replay
                 gain_monitor gain_fitter refGain_produce
+                hycal_rf_offset_calib
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # ---------------------------------------------------------------------------

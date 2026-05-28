@@ -14,11 +14,14 @@
 #include "ConfigSetup.h"
 #include "InstallPaths.h"
 #include "PipelineBuilder.h"
+#include "RfTime.h"
+#include "TdcDecoder.h"
 #include "gain_factor.h"
 
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <iostream>
+#include <limits>
 
 using json = nlohmann::json;
 
@@ -168,6 +171,16 @@ void Replay::clearReconEvent(EventVars_Recon &ev)
     std::fill(&ev.lms_peak_time[0][0],     &ev.lms_peak_time[0][0]     + 4 * fdec::MAX_PEAKS, 0.f);
     std::fill(&ev.lms_peak_height[0][0],   &ev.lms_peak_height[0][0]   + 4 * fdec::MAX_PEAKS, 0.f);
     std::fill(&ev.lms_peak_integral[0][0], &ev.lms_peak_integral[0][0] + 4 * fdec::MAX_PEAKS, 0.f);
+
+    // RF reference + per-cluster folded Δt.  Default cl_dt_rf to NaN so
+    // analysis can tell "event filtered before clustering" apart from
+    // "Δt = 0 ns" without inspecting a separate sentinel branch.
+    ev.rf_n_a = 0;
+    ev.rf_n_b = 0;
+    std::fill(std::begin(ev.rf_ns_a), std::end(ev.rf_ns_a), 0.f);
+    std::fill(std::begin(ev.rf_ns_b), std::end(ev.rf_ns_b), 0.f);
+    std::fill(std::begin(ev.cl_dt_rf), std::end(ev.cl_dt_rf),
+              std::numeric_limits<float>::quiet_NaN());
 }
 
 void Replay::clearLMSEvent(LMSEventVars &ev)
@@ -562,6 +575,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     gem::GemSystem                    gem_sys;
     fdec::ClusterConfig               cluster_cfg;
     prad2::HyCalTimeCuts              hc_time_cuts;
+    prad2::HyCalRfOffsets             hc_rf_offsets;
     DetectorTransform                 hycal_transform;
     std::array<DetectorTransform, 4>  gem_transforms;
     std::unordered_map<int, int>      roc_to_crate;
@@ -602,6 +616,10 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
         hc_time_cuts = prad2::LoadHyCalTimeCuts(
             "", hycal,
             gRunConfig.hc_time_win_lo, gRunConfig.hc_time_win_hi);
+        // PRad-1 had no RF readout — keep the offset table as uniform 0 so
+        // the per-event apply() call is a no-op (and cl_dt_rf branch stays
+        // NaN since rf_n_a == 0 for every event).
+        hc_rf_offsets = prad2::LoadHyCalRfOffsets("", hycal, 0.f);
     } else {
         // PRad-II: hand off to the canonical PipelineBuilder.  daq_cfg_ moves
         // through the builder (which then attaches map paths) and comes back
@@ -625,6 +643,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
         gem_sys          = std::move(pipeline.gem);
         cluster_cfg      = pipeline.hycal_cluster_cfg;
         hc_time_cuts     = std::move(pipeline.hycal_time_cuts);
+        hc_rf_offsets    = std::move(pipeline.hycal_rf_offsets);
         hycal_transform  = pipeline.hycal_transform;
         gem_transforms   = pipeline.gem_transforms;
 
@@ -736,10 +755,31 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
             ssp_raw_snapshot.assign(p, p + n_e10c->data_words);
         }
 
-        // Note: 0xE122 VTP and 0xE107 TDC raw words are intentionally NOT
-        // snapshotted here.  The recon tree carries reconstructed quantities
-        // only; raw VTP / TDC words live in the events tree (see Process())
-        // and offline reconstruction will read them from there.
+        // Snapshot every 0xE107 V1190/V1290 TDC bank for this read group
+        // so the recon path can compute per-cluster RF Δt without going
+        // back to the raw tree.  Mirrors the raw-replay snapshot in
+        // Process() — see the long comment there for the bit layout.
+        // (0xE122 VTP raw words are still intentionally NOT carried here.)
+        std::vector<uint32_t> tdc_roc_tags_snapshot;
+        std::vector<uint32_t> tdc_nwords_snapshot;
+        std::vector<uint32_t> tdc_words_snapshot;
+        {
+            const auto &all_nodes = ch.GetNodes();
+            for (auto *n_tdc : ch.FindByTag(daq_cfg_.tdc_bank_tag)) {
+                if (n_tdc->data_words == 0) continue;
+                if (n_tdc->parent >= 0
+                    && all_nodes[n_tdc->parent].type == evc::DATA_COMPOSITE)
+                    continue;
+                uint32_t roc = (n_tdc->parent >= 0)
+                    ? all_nodes[n_tdc->parent].tag : 0;
+                const uint32_t *p = ch.GetData(*n_tdc);
+                tdc_roc_tags_snapshot.push_back(roc);
+                tdc_nwords_snapshot.push_back(
+                    static_cast<uint32_t>(n_tdc->data_words));
+                tdc_words_snapshot.insert(tdc_words_snapshot.end(),
+                                          p, p + n_tdc->data_words);
+            }
+        }
 
         for (int ie = 0; ie < ch.GetNEvents(); ++ie) {
             event->clear();
@@ -763,6 +803,19 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
             ev->trigger_bits = event->info.trigger_bits;
             ev->timestamp    = event->info.timestamp;
             ev->ssp_raw      = ssp_raw_snapshot;
+
+            // Decode RF reference once per event from the TDC bank
+            // snapshot.  Channel A/B leading-edge ns arrays land on the
+            // recon tree (rf_ns_a/_b); per-cluster cl_dt_rf is filled
+            // after FormClusters() below.
+            tdc::RfTimeData rf;
+            tdc::RfTimeDecoder::DecodeReplay(
+                tdc_roc_tags_snapshot, tdc_nwords_snapshot,
+                tdc_words_snapshot, rf);
+            ev->rf_n_a = static_cast<uint8_t>(rf.n_a);
+            ev->rf_n_b = static_cast<uint8_t>(rf.n_b);
+            std::copy(rf.ns_a, rf.ns_a + rf.n_a, ev->rf_ns_a);
+            std::copy(rf.ns_b, rf.ns_b + rf.n_b, ev->rf_ns_b);
 
             // Per-event gain correction (time-series lookup by event number).
             const auto &gain_corr = gain_corr_ts.GetCorr(static_cast<int>(ev->event_num));
@@ -919,6 +972,15 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
                 ev->cl_energy[i] = local_hit.energy;
                 ev->cl_center[i] = local_hit.center_id;
                 ev->cl_flag[i] = local_hit.flag;
+
+                // Per-cluster RF Δt — fold (cl_time − nearest_a) onto
+                // (−T_RF/2, T_RF/2], then subtract per-module offset and
+                // re-fold.  NaN when rf has no ch-A hits this event
+                // (apply() preserves NaN through both steps).
+                const float dt0 = prad2::ClusterDeltaRf(hits[i].time, rf);
+                const auto *mod = hycal.module_by_id(hits[i].center_id);
+                const int mod_idx = mod ? mod->index : -1;
+                ev->cl_dt_rf[i] = hc_rf_offsets.apply(mod_idx, dt0);
             }
 
             //decode GEM data and reconstruct GEM hits

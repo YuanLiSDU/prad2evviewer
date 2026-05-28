@@ -1,16 +1,28 @@
 # Accessing RF time from PRad-II replayed raw files
 
 **Status.** RF time (V1190 TDC, ROC `0x40`) is captured by the
-`prad2dec` decoder and written to the `events` tree of every
-`*_raw.root` produced by `prad2ana_replay_rawdata`.
+`prad2dec` decoder and written to **both** trees:
 
-The `recon` tree does **not** carry it yet — a reconstructed per-event
-RF scalar will land there later (need to work with Rafo on the
-reconstruction algorithm). For now, read the RF info from the matching
-`*_raw.root` of the same run.
+* The `events` tree of every `*_raw.root` carries the raw 0xE107 words
+  (`tdc_roc_tags` / `tdc_nwords` / `tdc_words`), suitable for re-decoding.
+* The `recon` tree of every `*_recon.root` (since 2026-05) carries the
+  decoded leading-edge ns arrays plus a per-cluster folded Δt:
+  * `rf_n_a` / `rf_n_b` — count of leading edges on CH_A / CH_B
+  * `rf_ns_a[16]` / `rf_ns_b[16]` — ns arrays (TDC_LSB_NS already applied)
+  * `cl_dt_rf[n_clusters]` — `(cl_time − nearest RF tick)` folded onto
+    `(−T_RF/2, T_RF/2]` with per-module HyCal→RF offsets applied
+    (NaN when there's no RF tick that event).
 
-Files replayed before midnight 2026-05-06 do not have these branches —
-re-run `prad2ana_replay_rawdata` against the original EVIO to pick them
+The folding rule (Raffaella Demichelis, 2026-05): the recorded RF is a
+÷32 of the underlying 249.5 MHz CEBAF lattice, so any `Δt` between a
+cluster and an RF tick must be folded **mod 4.008 ns**, not mod 131 ns.
+See [`rf_time_reconstruction_plan.md`](rf_time_reconstruction_plan.md)
+for the full physics summary and implementation plan.
+
+Files replayed before midnight 2026-05-06 do not have the raw tdc_*
+branches; files replayed before 2026-05-28 do not have the recon-tree
+`rf_*` / `cl_dt_rf` branches. Re-run `prad2ana_replay_rawdata` (raw) or
+`prad2ana_replay_recon` (recon) against the original EVIO to pick them
 up.
 
 ---
@@ -172,19 +184,63 @@ D.TDC_LSB_NS, D.RF_ROC_TAG, D.RF_SLOT, D.RF_CH_A, D.RF_CH_B
 
 ---
 
-## 6. Known limitations / open questions
+## 6. Folded view on the recon tree (since 2026-05-28)
 
-* **No bunch-resolved RF in run 24386.** The populated 7.6 MHz signal
-  is the coarse divided reference (period ~131 ns). The folded
-  `pulse - nearest_RF` distribution is essentially uniform across
-  that period, so the data does **not** currently support sub-ns
-  time alignment via this signal alone.
+For end-user analysis the canonical entry point is the per-cluster
+`cl_dt_rf` branch:
+
+```python
+import uproot
+arr = uproot.open("PATH_TO_RECON.root")["recon"].arrays(
+    ["cl_dt_rf", "cl_energy", "cl_center", "n_clusters", "rf_n_a"])
+# Cut: single-cluster events with an RF tick, drop NaN
+import numpy as np
+mask = (arr["n_clusters"] == 1) & (arr["rf_n_a"] > 0)
+dt = arr["cl_dt_rf"][mask, 0]
+dt = dt[np.isfinite(dt)]
+# Folded onto (-2.004, 2.004) — a Gaussian peak means timing resolution
+# is better than the 4.008 ns CEBAF RF period.
+```
+
+The C++ macro `analysis/scripts/rf_time_plot.C` produces a four-panel
+QC PDF showing the folded distribution vs the unfolded one (mod 131 ns)
+and the wide-range unfolded plot with the 4.008 ns lattice highlighted.
+
+The per-module offsets that `cl_dt_rf` already includes are calibrated
+by `prad2ana_hycal_rf_offset_calib`:
+
+```
+prad2ana_hycal_rf_offset_calib                              \
+    -i prad_024840.*_recon.root                             \
+    -o database/hycal_rf_offsets/24840.json                 \
+    --min-energy 200 --min-entries 100 --fit-window 1.5     \
+    --csv rf_offsets_24840.csv
+```
+
+Wire the result into runinfo via a period entry:
+
+```
+{
+    "from_run":  24840,
+    "time_cuts": {"hycal_rf_offsets": "hycal_rf_offsets/24840.json"}
+}
+```
+
+## 7. Known limitations / open questions
+
+* **Bunch-resolved RF requires folding mod 4.008 ns.** The recorded
+  signal is the ÷32 divided reference (period ~131 ns); a naive
+  `cl_time − nearest_RF` distribution looks ~uniform over 131 ns.
+  After mod-4.008 folding the bunch structure becomes a Gaussian peak
+  (RMS ~ 1 ns on a single PWO crystal in run 24840), confirming
+  per-crystal timing resolution σ_t < T_RF.
 * **Only two channels** (slot 16 ch 0 and ch 8), leading edges only.
   No trailing edges, no other slots. Worth checking whether a faster
   RF (or a bunch-tagging signal) is available in the DAQ that we
   should pull into the readout.
-* **Recon tree doesn't carry `tdc_*` yet.** Read them from the
-  matching `*_raw.root` for now.
+* **Offsets recoverable from RF are modulo 4.008 ns.** Larger constant
+  offsets (cable lengths, FADC-board phase differences) must come from
+  another calibration before the RF fold is applied.
 
 Questions or issues — reply / comment on the corresponding logbook
 post. More technical info is in

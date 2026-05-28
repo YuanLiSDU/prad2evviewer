@@ -44,6 +44,8 @@
 #include "HyCalSystem.h"
 #include "HyCalCluster.h"
 #include "HyCalTimeCuts.h"
+#include "HyCalRfOffsets.h"
+#include "RfTime.h"
 #include "DetectorTransform.h"
 #include "PipelineBuilder.h"
 #include "RunInfoConfig.h"
@@ -993,6 +995,34 @@ static void bind_pipeline(py::module_ &m)
         .def("in_window", &prad2::HyCalTimeCuts::in_window,
              py::arg("module_index"), py::arg("t"));
 
+    // HyCalRfOffsets — per-module HyCal→RF time offset, with a default
+    // fallback.  Used by Replay to fill ReconEventData.cl_dt_rf.
+    py::class_<prad2::HyCalRfOffsets>(m, "HyCalRfOffsets",
+        "Per-module HyCal→RF time offset (ns).  Read off "
+        "Pipeline.hycal_rf_offsets.")
+        .def(py::init<>())
+        .def_readonly("default_off", &prad2::HyCalRfOffsets::default_off)
+        .def_readonly("n_overrides", &prad2::HyCalRfOffsets::n_overrides)
+        .def("at",    &prad2::HyCalRfOffsets::at,    py::arg("module_index"))
+        .def("apply", &prad2::HyCalRfOffsets::apply,
+             py::arg("module_index"), py::arg("folded_dt"),
+             "Subtract per-module offset from folded Δt and re-fold onto "
+             "(-T_RF/2, T_RF/2].");
+
+    // RF folding helpers — module-level so analysis scripts can use them
+    // without instantiating a Pipeline.
+    m.attr("RF_PERIOD_NS") = prad2::RF_PERIOD_NS;
+    m.attr("RF_DIVIDER")   = prad2::RF_DIVIDER;
+    m.attr("RF_DIV_NS")    = prad2::RF_DIV_NS;
+    m.def("fold_rf_delta", &prad2::FoldRfDelta, py::arg("dt_ns"),
+          "Fold a raw Δt onto (-T_RF/2, T_RF/2].  NaN passes through "
+          "unchanged.");
+    m.def("cluster_delta_rf", &prad2::ClusterDeltaRf,
+          py::arg("t_ref_ns"), py::arg("rf"), py::arg("use_b") = false,
+          "Compute the folded Δt between a reference time (typically "
+          "ClusterHit.time) and the nearest RF tick on channel A "
+          "(B if use_b=True).  Returns NaN when the channel has no hits.");
+
     // Pipeline — result bundle.  Owned by Python.  HyCalSystem and GemSystem
     // are exposed by reference (their lifetime is tied to Pipeline) so the
     // user can pass them directly into HyCalCluster / GEM reconstruction.
@@ -1014,6 +1044,9 @@ static void bind_pipeline(py::module_ &m)
         .def_readonly("hycal_time_cuts",    &prad2::Pipeline::hycal_time_cuts,
                       py::return_value_policy::reference_internal,
                       "Per-module HyCal peak-time window (sized to hycal.module_count()).")
+        .def_readonly("hycal_rf_offsets",   &prad2::Pipeline::hycal_rf_offsets,
+                      py::return_value_policy::reference_internal,
+                      "Per-module HyCal→RF time offset, ns.")
         .def_readonly("hycal_transform",    &prad2::Pipeline::hycal_transform,
                       py::return_value_policy::reference_internal)
         .def_property_readonly("gem_transforms",

@@ -108,6 +108,7 @@ PipelineBuilder &PipelineBuilder::set_hycal_map(std::string p)         { hycal_m
 PipelineBuilder &PipelineBuilder::set_gem_map(std::string p)           { gem_map_path_         = std::move(p); return *this; }
 PipelineBuilder &PipelineBuilder::set_hycal_calib(std::string p)       { hycal_calib_path_     = std::move(p); return *this; }
 PipelineBuilder &PipelineBuilder::set_hycal_time_cut(std::string p)    { hycal_time_cut_path_  = std::move(p); return *this; }
+PipelineBuilder &PipelineBuilder::set_hycal_rf_offset(std::string p)   { hycal_rf_offset_path_ = std::move(p); return *this; }
 PipelineBuilder &PipelineBuilder::set_gem_pedestal(std::string p)      { gem_pedestal_path_    = std::move(p); return *this; }
 PipelineBuilder &PipelineBuilder::set_gem_common_mode(std::string p)   { gem_common_mode_path_ = std::move(p); return *this; }
 PipelineBuilder &PipelineBuilder::set_run_number(int n)                { run_number_ = n; return *this; }
@@ -299,6 +300,28 @@ Pipeline PipelineBuilder::build()
         if (out.hycal_time_cuts.n_overrides > 0) {
             oss << "  per-module=" << out.hycal_time_cuts.n_overrides
                 << " (" << hc_time_path << ")";
+        }
+        LOG(oss.str());
+    }
+
+    // --- 7c. HyCal per-module HyCal→RF offset table ----------------------
+    // Always populate `out.hycal_rf_offsets` (uniform 0 ns when no file)
+    // so the per-event Δt fill uses a single call.  Path comes from
+    // runinfo's `time_cuts.hycal_rf_offsets` unless overridden.
+    {
+        std::string rf_off_path = hycal_rf_offset_path_.empty()
+            ? resolve(out.run_cfg.hycal_rf_offset_file)
+            : resolve(hycal_rf_offset_path_);
+        out.hycal_rf_offsets = prad2::LoadHyCalRfOffsets(
+            rf_off_path, out.hycal, 0.f);
+        out.hycal_rf_offset_path = rf_off_path;
+
+        std::ostringstream oss;
+        oss << "[setup] HC RF off : default=" << out.hycal_rf_offsets.default_off
+            << " ns";
+        if (out.hycal_rf_offsets.n_overrides > 0) {
+            oss << "  per-module=" << out.hycal_rf_offsets.n_overrides
+                << " (" << rf_off_path << ")";
         }
         LOG(oss.str());
     }

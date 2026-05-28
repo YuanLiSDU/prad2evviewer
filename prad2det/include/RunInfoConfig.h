@@ -91,6 +91,11 @@ struct RunConfig {
     // dir).  Empty -> uniform [hc_time_win_lo, hc_time_win_hi] from runinfo
     // is used for every module.  See prad2det/include/HyCalTimeCuts.h.
     std::string hycal_time_cut_file;
+    // Optional per-module HyCal→RF offset file (relative to database dir).
+    // Empty -> uniform 0 ns offset for every module.  See
+    // prad2det/include/HyCalRfOffsets.h and
+    // docs/analysis_notes/rf_time_reconstruction_plan.md.
+    std::string hycal_rf_offset_file;
 };
 
 // Returns a RunConfig populated by chaining all matching `configurations`
@@ -231,6 +236,8 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
             }
             if (tc.contains("hycal_module_file"))
                 result.hycal_time_cut_file = tc["hycal_module_file"].get<std::string>();
+            if (tc.contains("hycal_rf_offsets"))
+                result.hycal_rf_offset_file = tc["hycal_rf_offsets"].get<std::string>();
         }
         if (c.contains("matching")) {
             const auto &m = c["matching"];
@@ -376,6 +383,10 @@ inline bool WriteRunConfig(const std::string &path, int run_num,
         entry["gem"] = gem;
     }
     entry["time_cuts"]["hc_time_window"] = nlohmann::json::array({geo.hc_time_win_lo, geo.hc_time_win_hi});
+    if (!geo.hycal_time_cut_file.empty())
+        entry["time_cuts"]["hycal_module_file"] = geo.hycal_time_cut_file;
+    if (!geo.hycal_rf_offset_file.empty())
+        entry["time_cuts"]["hycal_rf_offsets"] = geo.hycal_rf_offset_file;
     entry["matching"]["radius"]          = geo.matching_radius;
     entry["matching"]["use_square_cut"]  = geo.matching_use_square;
     if (!geo.gain_data_dir.empty() || geo.gain_ref_run >= 0) {

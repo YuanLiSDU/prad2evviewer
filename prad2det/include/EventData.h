@@ -17,6 +17,7 @@
 
 #include "Fadc250Data.h"   // MAX_SAMPLES, MAX_PEAKS, MAX_ROCS, MAX_SLOTS
 #include "SspData.h"       // MAX_MPDS, MAX_APVS_PER_MPD, APV_STRIP_SIZE, SSP_TIME_SAMPLES
+#include "TdcData.h"       // RfTimeData::MAX_HITS_PER_CH
 
 #include <cstdint>
 #include <string>
@@ -240,11 +241,27 @@ struct ReconEventData {
     // Raw 0xE10C SSP trigger bank words (one variable-length entry per event)
     std::vector<uint32_t> ssp_raw;
 
-    // Note: 0xE122 VTP and 0xE107 TDC raw words live only in the `events`
-    // (raw) tree.  The recon tree should carry reconstructed quantities
-    // (trigger info from the VTP banks, an RF-time scalar from the TDC
-    // banks); those are TODO and will be added once the offline VTP /
-    // RF-time reconstruction modules exist.
+    // RF reference (decoded from 0xE107 ROC 0x40 slot 16 ch 0 / ch 8).
+    // Same content as tdc::RfTimeData but flattened for ROOT storage:
+    // rf_ns_a[0..rf_n_a) and rf_ns_b[0..rf_n_b) are the leading-edge ns
+    // arrays for the two RF channels (TDC_LSB_NS already applied,
+    // trailing edges dropped).  Cheap: ≤16 floats × 2 channels per event
+    // ≈ 128 bytes worst case, and most events only fill ~6 entries each.
+    // See prad2det/include/RfTime.h for the folding rule and the
+    // analysis-side helper that consumes these arrays.
+    uint8_t rf_n_a = 0;
+    uint8_t rf_n_b = 0;
+    float   rf_ns_a[tdc::RfTimeData::MAX_HITS_PER_CH] = {};
+    float   rf_ns_b[tdc::RfTimeData::MAX_HITS_PER_CH] = {};
+
+    // Per-cluster RF Δt, folded onto (−T_RF/2, T_RF/2] using channel A as
+    // the reference (`prad2::ClusterDeltaRf`).  Per-module offsets from
+    // database/hycal_rf_offsets/*.json have already been applied and the
+    // result re-folded.  NaN when rf_n_a == 0 for this event.
+    //
+    // Note: 0xE122 VTP raw words still live only in the `events` (raw)
+    // tree.  Offline VTP reconstruction will land here later.
+    float cl_dt_rf[kMaxClusters] = {};
 };
 
 // ── Scaler ("scalers" tree) ──────────────────────────────────────────────
