@@ -30,7 +30,7 @@ namespace tdc
 // Boyarinov (2026-05-05) gives ~24 ps for the rol2-normalized stream; the
 // underlying V1190 LSB after the V1190→V1290 left-shift is 25 ps. Use
 // TDC_LSB_NS rather than embedding a magic constant in analysis code.
-static constexpr double TDC_LSB_NS = 0.024;
+static constexpr double TDC_LSB_NS = 23.436e-3; // 23.436 ps per TDC ch, from Raffaella
 
 // --- PRad-II RF reference cabling ------------------------------------------
 // Channels 0 and 8 of slot 16 in ROC 0x40 carry the divided CEBAF RF
