@@ -64,8 +64,8 @@
         },
         {
             "from_run":    24670,
-            "beam_energy": 3488.43,
-            "calibration": {"file": "calibration/calibration_factor_3p5_5by5.json"},
+            "beam_energy": 3485.41,
+            "calibration": {"file": "calibration/calibration_factor_3p5_June1.json"},
             "time_cuts":   {"hc_time_window": [130.0, 200.0]},
             "gain_factor": {
                 "data_dir": "",
