@@ -465,7 +465,7 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
                         // Veto / LMS get unity factor.  Average of the three
                         // LMS channels from the time-series lookup.
                         if (mod_type == prad2::MOD_PbWO4) {
-                            ev->gain_factor[nch] = gain_corr.w[mod_id - 1000].avg;
+                            ev->gain_factor[nch] = (gain_corr.w[mod_id - 1000].corr[1] + gain_corr.w[mod_id - 1000].corr[2]) / 2.0f;
                         } else if (mod_type == prad2::MOD_PbGlass) {
                             ev->gain_factor[nch] = gain_corr.g[mod_id].avg;
                         } else {
@@ -892,7 +892,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
                                 if (!mod || !mod->is_hycal()) continue;
                                 // Per-ID gain correction: average of three LMS channels.
                                 const float gain = (mod->id > 1000)
-                                    ? gain_corr.w[mod->id - 1000].avg
+                                    ? (gain_corr.w[mod->id - 1000].corr[1] + gain_corr.w[mod->id - 1000].corr[2]) / 2.0f
                                     : gain_corr.g[mod->id].avg;
 
                                 if (prad1 == true) {
