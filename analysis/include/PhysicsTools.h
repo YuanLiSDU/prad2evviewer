@@ -140,9 +140,6 @@ public:
     // elastic e-e kinematic check for Moller event selection
     bool isMoller_kinematic(float theta_deg1, float energy1, float theta_deg2, float energy2, float EBeam, float resolution);
 
-    //calibration helpers
-    TF1 nonLinearity_func_;
-
     //physics analysis helpers
 
     // Get the center of the Moller distribution in x-y space

@@ -87,15 +87,6 @@ PhysicsTools::PhysicsTools(fdec::HyCalSystem &hycal)
         std::string title_integral = mod.name + " LMS Peak Integral;Integral (ADC*ns);Counts";
         h_modCH_lmsIntegral_[i] = std::make_unique<TH1F>(name_integral.c_str(), title_integral.c_str(), 1000, 0, 40000);
     }
-
-    nonLinearity_func_ = TF1("nonLinearity_func_",
-        [](double *x, double *p) {
-            // E_true = E_meas * (1 + nl * (E_meas - E_base) / 1000)
-            double E_meas = x[0];
-            double nl     = p[0];
-            double E_base = p[1]; // calibration energy in MeV, will be fixed in fit
-            return E_meas * (1.0 + nl * (E_meas - E_base) / 1000.0);
-        }, 0, 5000, 2);
 }
 
 PhysicsTools::~PhysicsTools() = default;

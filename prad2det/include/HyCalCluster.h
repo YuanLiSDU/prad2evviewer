@@ -91,6 +91,7 @@ struct ClusterHit {
     int   nblocks;      // number of modules in cluster
     int   npos;         // number of modules used in position reconstruction
     uint32_t flag;      // cluster flags
+    float linear_corr;    // linearity correction factor (E_corr / E_meas)
 };
 
 // Shower-max depth into the calorimeter face for an EM shower of energy `E`
