@@ -136,11 +136,10 @@ struct Module {
     double      cal_non_linear  = 0.;   // non-linear correction coefficient
 
     // convert ADC value (pedestal-subtracted) to energy in MeV
-    // includes non-linear correction: E + nl * (E - E_cal) / 1000
     double energize(double adc) const {
         if (adc < 0.) return 0.;
         double E = cal_factor * adc;
-        return E + cal_non_linear * (E - cal_base_energy) / 1000.;
+        return E;
     }
 
     // pre-computed cross-sector neighbors (same-sector uses grid lookup)

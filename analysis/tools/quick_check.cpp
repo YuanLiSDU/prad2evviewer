@@ -149,8 +149,8 @@ int main(int argc, char *argv[])
 
     for (int i = 0; i < N; i++) {
         tree->GetEntry(i);
-        //if (i % 1000 == 0)
-            //std::cerr << "\rPass 1: " << i << " / " << N << std::flush;
+        if (i % 100000 == 0)
+            std::cerr << "\rPass 1: " << i << " / " << N << std::flush;
 
         for (int j = 0; j < ev.n_clusters; j++) {
             float r = std::sqrt(ev.cl_x[j]*ev.cl_x[j] + ev.cl_y[j]*ev.cl_y[j]);
@@ -160,6 +160,17 @@ int main(int argc, char *argv[])
             physics.FillEnergyVsTheta(theta, ev.cl_energy[j]);
             hit_pos->Fill(ev.cl_x[j], ev.cl_y[j]);
             h_all->Fill(ev.cl_energy[j]);
+
+            if (ev.cl_nblocks[j] > 2) {
+                int mod_id = ev.cl_center[j];
+                auto mod = hycal.module_by_id(mod_id);
+                if ( !mod || !mod->is_pwo4()) continue; // only look at PbWO4 crystals
+                // require hit to be in central 3x3 of a 5x5 grid (|xd|,|yd| < 0.3)
+                float xd = (ev.cl_x[j] - (float)mod->x) / (float)mod->size_x;
+                float yd = (ev.cl_y[j] - (float)mod->y) / (float)mod->size_y;
+                if (std::abs(xd) >= 0.3f || std::abs(yd) >= 0.3f) continue;
+                physics.FillEnergyVsTheta(theta, ev.cl_energy[j]);
+            }
         }
         h_tot->Fill(ev.total_energy);
 
