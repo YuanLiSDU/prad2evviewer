@@ -72,7 +72,7 @@ static bool ensureGainCorr(int run_num,
 
     // Temporary directory for intermediate *_lms.root files.
     // replay_gainCorr deletes them (no -s flag); we clean up the dir itself.
-    char tmpl[] = "/tmp/prad2_lms_XXXXXX";
+    char tmpl[] = "./prad2_lms_XXXXXX";
     char *tmp = mkdtemp(tmpl);
     if (!tmp) {
         std::cerr << "[gain_corr] mkdtemp failed: " << std::strerror(errno) << "\n";
