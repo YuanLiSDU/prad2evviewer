@@ -17,7 +17,7 @@
 //   -j  number of threads (default: 4)
 //   -c  DAQ configuration file
 //   -d  HyCal map file (default: <db>/hycal_map.json)
-//   -b  LMS events per gain-correction batch (default: 1000)
+//   -b  LMS events per gain-correction batch (default: 4000)
 //   -r  reference run number for gain table (default: from general.json)
 //   -s  save intermediate *_lms.root (merged via hadd); default: delete them
 //=============================================================================
@@ -451,7 +451,7 @@ int main(int argc, char *argv[])
     std::string daq_config, daq_map, output_dir;
     int  max_files   = -1;
     int  num_threads = 4;
-    int  batch_size  = 2000;
+    int  batch_size  = 4000;
     int  ref_run     = -1;
     bool save_lms    = false;
     PlotConfig  plot_cfg;
@@ -498,7 +498,7 @@ int main(int argc, char *argv[])
         std::cerr <<
             "Usage: replay_gainCorr <evio_file_or_dir> [...] -o output_dir\n"
             "       [-f max_files] [-j threads] [-c daq_config.json] [-d hycal_map.json]\n"
-            "       [-b batch_size (2000)] [-r ref_run]\n"
+            "       [-b batch_size (4000)] [-r ref_run]\n"
             "       [-s] (save intermediate *_lms.root merged via hadd; default: delete)\n"
             "       [-p] [-w id1,id2,...] (enable plots; -w selects extra W modules)\n";
         return 1;

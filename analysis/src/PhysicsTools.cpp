@@ -32,7 +32,7 @@ PhysicsTools::PhysicsTools(fdec::HyCalSystem &hycal)
         auto &mod = hycal_.module(i);
         std::string name = "h_" + mod.name;
         std::string title = mod.name + " cluster energy;Energy (MeV);Counts";
-        module_hists_[i] = std::make_unique<TH1F>(name.c_str(), title.c_str(), 250, 0, 5000);
+        module_hists_[i] = std::make_unique<TH1F>(name.c_str(), title.c_str(), 500, 0, 5000);
     }
     h2_energy_module_ = std::make_unique<TH2F>(
         "h2_energy_module", "Energy vs Module;Module Index;Energy (MeV)",
@@ -211,40 +211,48 @@ std::array<float, 3> PhysicsTools::FitPeakResolution(int module_id) const
     TH1F *h = module_hists_[module_index].get();
     if (!h || h->GetEntries() < 1) return {0.f, 0.f, 100.f};
 
-    // --- peak search via TSpectrum ---
-    TSpectrum spec(10);
-    // sigma=2 bins, threshold=5% of maximum; suppress background and drawing
-    int nfound = spec.Search(h, 2, "nobackground nodraw", 0.05);
+    const double resolution = 0.035; // 3.5% / sqrt(E/1000) energy resolution
 
-    double peak0;
-    if (nfound > 0) {
-        // pick the rightmost (highest-energy) peak
-        const double *xpeaks = spec.GetPositionX();
-        peak0 = xpeaks[0];
-        for (int i = 1; i < nfound; ++i)
-            if (xpeaks[i] > peak0) peak0 = xpeaks[i];
-    } else {
-        // fallback: maximum bin
-        peak0 = h->GetBinCenter(h->GetMaximumBin());
+    // estimate sigma from energy resolution: sigma = E * resolution / sqrt(E/1000)
+    auto estimateSigma = [&](double E) -> double {
+        return (E > 0.) ? E * resolution / std::sqrt(E / 1000.) : 1.;
+    };
+
+    // Step 1: find histogram maximum as initial center
+    double center = h->GetBinCenter(h->GetMaximumBin());
+
+    // Step 2: weighted mean within [center ± 3σ]
+    double sigma = estimateSigma(center);
+    double sumW = 0., sumWx = 0.;
+    for (int b = 1; b <= h->GetNbinsX(); ++b) {
+        double x = h->GetBinCenter(b);
+        if (x < center - 3.*sigma || x > center + 3.*sigma) continue;
+        double w = h->GetBinContent(b);
+        sumW  += w;
+        sumWx += w * x;
+    }
+    double mean = (sumW > 0.) ? sumWx / sumW : center;
+
+    // Step 3: first Gaussian fit within [mean ± 2σ], σ re-estimated from new mean
+    sigma = estimateSigma(mean);
+    {
+        TF1 g1("_fpk_g1_", "gaus", mean - 2.*sigma, mean + 2.*sigma);
+        g1.SetParameters(h->GetMaximum(), mean, sigma);
+        h->Fit(&g1, "RQ0");
+        mean  = g1.GetParameter(1);
+        // keep sigma from resolution for next iteration boundary
     }
 
-    // --- Gaussian fit around the selected peak ---
-    double rms0 = 40.;
-    double lo = peak0 - 1.5 * rms0, hi = peak0 + 1.5 * rms0;
+    // Step 4: final Gaussian fit within [mean ± 1σ], σ re-estimated from new mean
+    sigma = estimateSigma(mean);
+    TF1 g2("_fpk_g2_", "gaus", mean - sigma, mean + sigma);
+    g2.SetParameters(h->GetMaximum(), mean, sigma);
+    h->Fit(&g2, "RQ0");
+    mean  = g2.GetParameter(1);
+    sigma = std::abs(g2.GetParameter(2));
+    double chi2 = (g2.GetNDF() > 0) ? g2.GetChisquare() / g2.GetNDF() : 0.;
 
-    // Crystal Ball: Gaussian core + power-law low-energy tail
-    // p[0]=amplitude, p[1]=mean, p[2]=sigma, p[3]=alpha, p[4]=n
-    TF1 cb("cb_fit", crystalBallFunc, lo, hi, 5);
-    cb.SetParameters(h->GetBinContent(h->FindBin(peak0)), peak0, rms0, 1.5, 3.0);
-    cb.SetParLimits(2, 1.,  200.);   // sigma > 0
-    cb.SetParLimits(3, 0.1,   5.);   // alpha > 0
-    cb.SetParLimits(4, 1.1,  20.);   // n > 1
-    h->Fit(&cb, "RQL");
-
-    float mean  = cb.GetParameter(1);
-    float sigma = std::abs(cb.GetParameter(2));
-    float chi2  = (cb.GetNDF() > 0) ? cb.GetChisquare() / cb.GetNDF() : 0.f;
-    return {mean, sigma, chi2};
+    return {static_cast<float>(mean), static_cast<float>(sigma), static_cast<float>(chi2)};
 }
 
 void PhysicsTools::Resolution2Database(int run_id)

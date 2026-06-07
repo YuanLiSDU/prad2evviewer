@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <vector>
+#include <map>
 #include <thread>
 #include <atomic>
 #include <mutex>
@@ -68,7 +69,7 @@ static bool ensureGainCorr(int run_num,
 
     // Temporary directory for intermediate *_lms.root files.
     // replay_gainCorr deletes them (no -s flag); we clean up the dir itself.
-    char tmpl[] = "/tmp/prad2_lms_XXXXXX";
+    char tmpl[] = "./prad2_lms_XXXXXX";
     char *tmp = mkdtemp(tmpl);
     if (!tmp) {
         std::cerr << "[gain_corr] mkdtemp failed: " << std::strerror(errno) << "\n";
@@ -208,11 +209,25 @@ int main(int argc, char *argv[])
               << num_threads << " threads\n";
 
     if(daq_map.empty()) daq_map = db_dir + "/hycal_map.json";
-    
-    std::string run_str = get_run_str(evio_files[0]);
+
+    // Group files by run number; ensure gain correction for every distinct run.
+    {
+        std::map<int, std::vector<std::string>> run_files_map;
+        for (int i = 0; i < num_files; ++i)
+            run_files_map[get_run_int(evio_files[i])].push_back(evio_files[i]);
+
+        std::cout << "Detected " << run_files_map.size() << " run(s):";
+        for (auto &[rn, rf] : run_files_map)
+            std::cout << " run" << rn << " (" << rf.size() << " file(s))";
+        std::cout << "\n";
+
+        for (auto &[rn, rf] : run_files_map)
+            ensureGainCorr(rn, db_dir, rf, static_cast<int>(rf.size()),
+                           daq_config, daq_map, num_threads);
+    }
+
     int run_num = get_run_int(evio_files[0]);
     gRunConfig = LoadRunConfig(db_dir + "/runinfo/general.json", run_num);
-    ensureGainCorr(run_num, db_dir, evio_files, num_files, daq_config, daq_map, num_threads);
 
     // shared work queue: atomic index into file list
     std::atomic<int> next_file{0};

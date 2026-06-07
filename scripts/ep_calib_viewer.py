@@ -79,7 +79,7 @@ MODULES_JSON = next((p for p in _DB_CANDIDATES if p.is_file()), None)
 
 class ModuleMetrics:
     """Per-module computed metrics for one (run, iteration) pair."""
-    __slots__ = ("name", "stats", "peak", "sigma", "chi2",
+    __slots__ = ("name", "stats", "peak", "sigma", "chi2", "amp",
                  "factor", "base_energy", "old_factor")
 
     def __init__(self, name: str):
@@ -88,6 +88,7 @@ class ModuleMetrics:
         self.peak        = 0.0    # measured peak (MeV)
         self.sigma       = 0.0    # Gaussian sigma (MeV)
         self.chi2        = 0.0    # chi2/ndf of Gaussian fit
+        self.amp         = 0.0    # fitted Gaussian amplitude (counts)
         self.factor      = 1.0    # calibration factor from JSON (after this iteration)
         self.base_energy = 0.0    # expected peak from JSON (MeV)
         self.old_factor  = 0.0    # factor before this iteration (from .dat oldFactor column)
@@ -204,43 +205,78 @@ def _gaussian(x, amp, mu, sigma):
 
 
 def _fit_histogram(counts: np.ndarray, edges: np.ndarray
-                   ) -> Tuple[float, float, float]:
-    """Return (peak_MeV, sigma_MeV, chi2_ndf). Falls back to moment estimates."""
+                   ) -> Tuple[float, float, float, float]:
+    """Return (peak_MeV, sigma_MeV, chi2_ndf, amp).
+
+    Mirrors the iterative algorithm in PhysicsTools::FitPeakResolution():
+      1. Find histogram maximum as initial center.
+      2. Weighted mean within [center ± 3σ]  (σ from 3.5%/√(E/1000) resolution).
+      3. First Gaussian fit in [mean ± 2σ]  (σ re-estimated from new mean).
+      4. Second (final) Gaussian fit in [mean ± 1σ]  (σ re-estimated again).
+    Falls back gracefully when scipy is unavailable or fits diverge.
+    """
     centers = 0.5 * (edges[:-1] + edges[1:])
-    bw      = edges[1] - edges[0]
     total   = counts.sum()
     if total < 5:
-        return 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0
 
-    # initial guess from histogram moments
-    mu0    = (centers * counts).sum() / total
-    sig0   = max(math.sqrt(((centers - mu0) ** 2 * counts).sum() / total), bw)
-    amp0   = counts.max()
+    RESOLUTION = 0.035  # 3.5% / sqrt(E/1000)
 
-    # restrict fit window to ±2.5 sigma around peak
-    lo, hi = mu0 - 2.5 * sig0, mu0 + 2.5 * sig0
-    mask   = (centers >= lo) & (centers <= hi) & (counts > 0)
-    if mask.sum() < 5:
-        return mu0, sig0, 0.0
+    def estimate_sigma(E: float) -> float:
+        return E * RESOLUTION / math.sqrt(max(E, 1.0) / 1000.0)
 
-    xf, yf = centers[mask], counts[mask].astype(float)
+    # Step 1: histogram maximum as initial center
+    center = float(centers[int(np.argmax(counts))])
 
-    if HAS_SCIPY:
+    # Step 2: weighted mean within [center ± 3σ]
+    sigma = estimate_sigma(center)
+    mask  = (centers >= center - 3.0 * sigma) & (centers <= center + 3.0 * sigma)
+    w = counts[mask]
+    x = centers[mask]
+    mean = float((x * w).sum() / w.sum()) if w.sum() > 0 else center
+
+    if not HAS_SCIPY:
+        return mean, estimate_sigma(mean), 0.0, 0.0
+
+    def _gauss_fit(mu0: float, half_width: float):
+        """Fit Gaussian in [mu0 ± half_width]; return (mu, sigma, chi2_ndf, amp) or None."""
+        lo, hi = mu0 - half_width, mu0 + half_width
+        m = (centers >= lo) & (centers <= hi) & (counts > 0)
+        if m.sum() < 4:
+            return None
+        xf = centers[m]
+        yf = counts[m].astype(float)
+        sig0 = max(half_width / 3.0, float(edges[1] - edges[0]))
         try:
-            popt, _ = curve_fit(_gaussian, xf, yf,
-                                p0=[amp0, mu0, sig0],
-                                bounds=([0, lo, bw],
-                                        [amp0 * 3, hi, hi - lo]),
-                                maxfev=3000)
-            amp_f, mu_f, sig_f = popt
+            popt, _ = curve_fit(
+                _gaussian, xf, yf,
+                p0=[float(yf.max()), mu0, sig0],
+                bounds=([0, lo, float(edges[1] - edges[0])],
+                        [float(yf.max()) * 5, hi, half_width * 2]),
+                maxfev=5000,
+            )
+            amp_f, mu_f, sig_f = float(popt[0]), float(popt[1]), abs(float(popt[2]))
             resid = yf - _gaussian(xf, *popt)
-            chi2  = (resid ** 2 / np.maximum(yf, 1)).sum()
+            chi2  = float((resid ** 2 / np.maximum(yf, 1.0)).sum())
             ndf   = max(len(xf) - 3, 1)
-            return mu_f, abs(sig_f), chi2 / ndf
+            return mu_f, sig_f, chi2 / ndf, amp_f
         except Exception:
-            pass
+            return None
 
-    return mu0, sig0, 0.0
+    # Step 3: first Gaussian fit within [mean ± 2σ]
+    sigma = estimate_sigma(mean)
+    r1 = _gauss_fit(mean, 2.0 * sigma)
+    if r1 is not None:
+        mean = r1[0]
+
+    # Step 4: final Gaussian fit within [mean ± 1σ]
+    sigma = estimate_sigma(mean)
+    r2 = _gauss_fit(mean, sigma)
+    if r2 is not None:
+        return r2
+    if r1 is not None:
+        return r1
+    return mean, estimate_sigma(mean), 0.0, 0.0
 
 
 def compute_metrics(data: IterData) -> None:
@@ -260,7 +296,7 @@ def compute_metrics(data: IterData) -> None:
                 counts, edges = f[raw_key].to_numpy()
                 mm = data.metrics.setdefault(mod_name, ModuleMetrics(mod_name))
                 mm.stats = float(counts.sum())
-                mm.peak, mm.sigma, mm.chi2 = _fit_histogram(counts, edges)
+                mm.peak, mm.sigma, mm.chi2, mm.amp = _fit_histogram(counts, edges)
 
     # --- JSON factor data ---
     for name, entry in factors.items():
@@ -632,10 +668,10 @@ class ModuleDetailPanel(QWidget):
 
             # overlay Gaussian fit
             if mm and mm.peak > 0 and mm.sigma > 0 and HAS_SCIPY:
-                x  = np.linspace(edges_c[0], edges_c[-1], 500)
-                bw = edges_c[1] - edges_c[0] if len(edges_c) > 1 else 1.0
-                area = counts.sum() * bw
-                amp  = area / (mm.sigma * math.sqrt(2 * math.pi))
+                x   = np.linspace(edges_c[0], edges_c[-1], 500)
+                bw  = edges_c[1] - edges_c[0] if len(edges_c) > 1 else 1.0
+                amp = mm.amp if mm.amp > 0 else (
+                    counts.sum() * bw / (mm.sigma * math.sqrt(2 * math.pi)))
                 gaus = amp * np.exp(-0.5 * ((x - mm.peak) / mm.sigma) ** 2)
                 ax.plot(x, gaus, color=THEME.WARN, linewidth=1.5,
                         label=f"Gauss fit  μ={mm.peak:.0f}")
@@ -916,7 +952,9 @@ class ModuleDetailPanel(QWidget):
             msg += f"\nNew factor: {new_factor:.5f}   (oldFactor={old_factor:.5f},  expected={base_energy:.1f} MeV)"
         self._refit_status.setText(msg)
         self._apply_btn.setEnabled(new_factor > 0.0)
-        self._redraw_refit_overlay(name, counts, edges, mu0, sig0)
+        bw_mean = float(edges[1] - edges[0]) if len(edges) > 1 else 1.0
+        amp_mean = counts.sum() * bw_mean / (sig0 * math.sqrt(2 * math.pi))
+        self._redraw_refit_overlay(name, counts, edges, mu0, sig0, amp_mean)
 
     def _do_refit(self) -> None:
         """Gaussian refit using user-specified range and initial peak center."""
@@ -997,7 +1035,7 @@ class ModuleDetailPanel(QWidget):
             self._refit_status.setText(msg)
             self._apply_btn.setEnabled(self._refit_new_factor > 0.0)
             self._redraw_refit_overlay(
-                name, counts, edges, float(mu_f), float(abs(sig_f)))
+                name, counts, edges, float(mu_f), float(abs(sig_f)), float(amp_f))
 
         except Exception as exc:
             self._refit_status.setText(f"Fit failed: {exc}")
@@ -1011,6 +1049,7 @@ class ModuleDetailPanel(QWidget):
             edges: np.ndarray,
             mu_f: float,
             sig_f: float,
+            amp_f: float = 0.0,
     ) -> None:
         """Redraw histogram with old (dashed) + new (solid) Gaussian overlaid."""
         self._canvas.clear_ax()
@@ -1032,15 +1071,15 @@ class ModuleDetailPanel(QWidget):
         # original fit — dim dashed line
         mm = self._mm
         if mm and mm.peak > 0.0 and mm.sigma > 0.0:
-            area = float(c.sum()) * bw
-            amp  = area / (mm.sigma * math.sqrt(2 * math.pi))
-            ax.plot(x, amp * np.exp(-0.5 * ((x - mm.peak) / mm.sigma) ** 2),
+            orig_amp = mm.amp if mm.amp > 0.0 else (
+                float(c.sum()) * bw / (mm.sigma * math.sqrt(2 * math.pi)))
+            ax.plot(x, orig_amp * np.exp(-0.5 * ((x - mm.peak) / mm.sigma) ** 2),
                     color=THEME.TEXT_DIM, linewidth=1.0, linestyle="--",
                     label=f"Original  μ={mm.peak:.0f}")
         # new refit — highlighted solid line
-        area = float(c.sum()) * bw
-        amp  = area / (sig_f * math.sqrt(2 * math.pi))
-        ax.plot(x, amp * np.exp(-0.5 * ((x - mu_f) / sig_f) ** 2),
+        if amp_f <= 0.0:
+            amp_f = float(c.sum()) * bw / (sig_f * math.sqrt(2 * math.pi))
+        ax.plot(x, amp_f * np.exp(-0.5 * ((x - mu_f) / sig_f) ** 2),
                 color=THEME.WARN, linewidth=2.0,
                 label=f"Refit  μ={mu_f:.0f}")
 
