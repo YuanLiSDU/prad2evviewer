@@ -53,6 +53,12 @@ using EventVars_Recon = prad2::ReconEventData;
 
 static std::vector<std::string> collectRootFiles(const std::string &path);
 
+bool inHyCal(double xmm, double ymm) {
+    const double module = 20.75; // mm
+    return (fabs(xmm) > module * 2.5 || fabs(ymm) > module * 2.5)
+        && (fabs(xmm) < module * 16. && fabs(ymm) < module * 16.);
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────
 
 int main(int argc, char *argv[])
@@ -129,17 +135,17 @@ int main(int argc, char *argv[])
 
     // --- histograms ---
     TH2F *hit_pos = new TH2F("hit_pos",
-        "Hit positions;X (mm);Y (mm)", 250, -500, 500, 250, -500, 500);
+        "Hit positions;X (mm);Y (mm)", 720, -360, 360, 720, -360, 360);
     TH1F *h_1cl = new TH1F("one_cluster_energy",
-        "Single-cluster energy;E (MeV);Counts", 1000, 0, 4000);
+        "Single-cluster energy;E (MeV);Counts", 4000, 0, 4000);
     TH1F *h_2cl = new TH1F("two_cluster_energy",
-        "Two-cluster energy;E (MeV);Counts", 1000, 0, 4000);
+        "Two-cluster energy;E (MeV);Counts", 4000, 0, 4000);
     TH1F *h_all = new TH1F("clusters_energy",
-        "All clusters;E (MeV);Counts", 1000, 0, 4000);
+        "All clusters;E (MeV);Counts", 4000, 0, 4000);
     TH1F *h_tot = new TH1F("total_energy",
-        "Total energy per event;E (MeV);Counts", 1000, 0, 4000);
+        "Total energy per event;E (MeV);Counts", 4000, 0, 4000);
     TH2F *h2_energy_theta_ep_ee = new TH2F("energy_vs_theta",
-        "Energy vs Theta(1 cluster);Theta (deg);Energy (MeV)", 160, 0, 8, 4000, 0, 4000);
+        "Energy vs Theta(1 cluster);Theta (deg);Energy (MeV)", 160, 0, 8, 7500, 0, 5000);
 
     MollerData hycal_mollers;
 
@@ -149,7 +155,7 @@ int main(int argc, char *argv[])
 
     for (int i = 0; i < N; i++) {
         tree->GetEntry(i);
-        if (i % 100000 == 0)
+        if (i % 10000 == 0)
             std::cerr << "\rPass 1: " << i << " / " << N << std::flush;
 
         for (int j = 0; j < ev.n_clusters; j++) {
@@ -157,31 +163,30 @@ int main(int argc, char *argv[])
             float theta = std::atan(r / ev.cl_z[j]) * 180.f / M_PI;
 
             physics.FillEnergyVsModule(ev.cl_center[j], ev.cl_energy[j]);
-            physics.FillEnergyVsTheta(theta, ev.cl_energy[j]);
             hit_pos->Fill(ev.cl_x[j], ev.cl_y[j]);
             h_all->Fill(ev.cl_energy[j]);
 
-            if (ev.cl_nblocks[j] > 2) {
-                int mod_id = ev.cl_center[j];
+            if (ev.cl_nblocks[j] > 3 && inHyCal(ev.cl_x[j], ev.cl_y[j])) {
+                /*int mod_id = ev.cl_center[j];
                 auto mod = hycal.module_by_id(mod_id);
                 if ( !mod || !mod->is_pwo4()) continue; // only look at PbWO4 crystals
                 // require hit to be in central 3x3 of a 5x5 grid (|xd|,|yd| < 0.3)
                 float xd = (ev.cl_x[j] - (float)mod->x) / (float)mod->size_x;
                 float yd = (ev.cl_y[j] - (float)mod->y) / (float)mod->size_y;
-                if (std::abs(xd) >= 0.3f || std::abs(yd) >= 0.3f) continue;
+                if (std::abs(xd) >= 0.3f || std::abs(yd) >= 0.3f) continue;*/
                 physics.FillEnergyVsTheta(theta, ev.cl_energy[j]);
             }
         }
         h_tot->Fill(ev.total_energy);
 
-        if (ev.n_clusters == 1) {
+        if (ev.n_clusters == 1 && inHyCal(ev.cl_x[0], ev.cl_y[0])) {
             physics.FillModuleEnergy(ev.cl_center[0], ev.cl_energy[0]);
             h_1cl->Fill(ev.cl_energy[0]);
             h2_energy_theta_ep_ee->Fill(std::atan(std::sqrt(ev.cl_x[0]*ev.cl_x[0] + ev.cl_y[0]*ev.cl_y[0]) / ev.cl_z[0]) * 180.f / M_PI,
                                       ev.cl_energy[0]);
         }
 
-        if (ev.n_clusters == 2) {
+        if (ev.n_clusters == 2 && inHyCal(ev.cl_x[0], ev.cl_y[0]) && inHyCal(ev.cl_x[1], ev.cl_y[1])) {
             h_2cl->Fill(ev.cl_energy[0]);
             h_2cl->Fill(ev.cl_energy[1]);
 
