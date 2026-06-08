@@ -404,71 +404,7 @@ void process_event( TTree *tree, const EventVars_Recon &ev, const fdec::HyCalSys
             std::cerr << "Reached max events limit: " << max_events << "\n";
             break;
         }
-
-        /*if ( ev.n_clusters == 1) {
-            int mod_id = ev.cl_center[0];
-            if ( ev.cl_nblocks[0] < 3) continue;
-            auto mod = hycal.module_by_id(mod_id);
-            if ( !mod || !mod->is_pwo4()) continue; // only look at PbWO4 crystals
-            float x = ev.cl_x[0], y = ev.cl_y[0], z = ev.cl_z[0];
-            float theta = std::atan2(std::sqrt(x*x + y*y), z) * 180.f / M_PI;
-            float Eexp = physics.ExpectedEnergy(theta, Ebeam, "ep");
-            float energy = ev.cl_energy[0];
-            if(Ebeam < 1000. && theta < 1.1) continue;
-            if(std::abs(energy - Eexp) < 5. * resolution * Eexp / sqrt(Eexp/1000.f)) {
-                energy_hists[mod_id]->Fill(energy);
-            }
-        }
-        if ( ev.n_clusters == 2) {
-            bool match1 = false, match2 = false;
-            match1 = ((ev.matchFlag[0] & (1u << 0)) || (ev.matchFlag[0] & (1u << 1)))
-                  && ((ev.matchFlag[0] & (1u << 2)) || (ev.matchFlag[0] & (1u << 3)));
-            match2 = ((ev.matchFlag[1] & (1u << 0)) || (ev.matchFlag[1] & (1u << 1)))
-                  && ((ev.matchFlag[1] & (1u << 2)) || (ev.matchFlag[1] & (1u << 3)));
-            if (!match1 || !match2) continue; // require both clusters to have a good track match, likely e-e events
-            int mod_id_1 = ev.cl_center[0];
-            int mod_id_2 = ev.cl_center[1];
-            auto mod1 = hycal.module_by_id(mod_id_1);
-            auto mod2 = hycal.module_by_id(mod_id_2);
-            if ( !mod1 || !mod1->is_pwo4() || !mod2 || !mod2->is_pwo4()) continue; // only look at PbWO4 crystals
-            float x1 = ev.cl_x[0], y1 = ev.cl_y[0], z1 = ev.cl_z[0];
-            float x2 = ev.cl_x[1], y2 = ev.cl_y[1], z2 = ev.cl_z[1];
-            if(ev.matchGEMx[0][0] > -900.) {
-                x1 = ev.matchGEMx[0][0]; y1 = ev.matchGEMy[0][0]; z1 = ev.matchGEMz[0][0];
-            }
-            else {
-                x1 = ev.matchGEMx[0][1]; y1 = ev.matchGEMy[0][1]; z1 = ev.matchGEMz[0][1];
-            }
-            if(ev.matchGEMx[1][0] > -900.) {
-                x2 = ev.matchGEMx[1][0]; y2 = ev.matchGEMy[1][0]; z2 = ev.matchGEMz[1][0];
-            }
-            else {
-                x2 = ev.matchGEMx[1][1]; y2 = ev.matchGEMy[1][1]; z2 = ev.matchGEMz[1][1];
-            }
-            float theta1 = std::atan2(std::sqrt(x1*x1 + y1*y1), z1) * 180.f / M_PI;
-            float theta2 = std::atan2(std::sqrt(x2*x2 + y2*y2), z2) * 180.f / M_PI;
-            float Eexp1 = physics.ExpectedEnergy(theta1, Ebeam, "ee");
-            float Eexp2 = physics.ExpectedEnergy(theta2, Ebeam, "ee");
-            if(Eexp1 > Eexp2 && theta1 > theta2) continue;
-            if(Eexp2 > Eexp1 && theta2 > theta1) continue;
-            float energy1 = ev.cl_energy[0];
-            float energy2 = ev.cl_energy[1];
-            if(energy1 > energy2 && theta1 > theta2) continue;
-            if(energy2 > energy1 && theta2 > theta1) continue;
-            float phi1 = physics.GetPhiAngle(x1, y1);
-            float phi2 = physics.GetPhiAngle(x2, y2);
-            float phi_diff = fabs(phi1 - phi2) - 180.f;
-            if (phi_diff < -10.f || phi_diff > 10.f) continue;
-            //if ()
-            if(std::abs(energy1 + energy2 - Ebeam) < 3. * resolution * Ebeam / sqrt(Ebeam/1000.f)) {
-                if(std::abs(energy1 - Eexp1) < 3. * resolution * Eexp1 / sqrt(Eexp1/1000.f) &&
-                   std::abs(energy2 - Eexp2) < 3. * resolution * Eexp2 / sqrt(Eexp2/1000.f)) {
-                    energy_hists[mod_id_1]->Fill(energy1);
-                    energy_hists[mod_id_2]->Fill(energy2);
-                }
-            }
-        }*/
-        //if (Ebeam < 1000.f && ev.n_clusters != 1) continue;
+        
         for( int j = 0; j < ev.n_clusters; j++) {
             int mod_id = ev.cl_center[j];
             if (ev.cl_nblocks[j] < 4) continue;
