@@ -224,7 +224,7 @@ struct ReconEventData {
 
     //veto information
     int      veto_nch = 0;
-    uint8_t veto_id[4]   = {}; // 0,1,2,3 for veto1-4
+    uint8_t veto_id[4]   = {}; // 1,2,3,4 for veto1-4
     int veto_npeaks[4] = {};
     float veto_peak_time[4][fdec::MAX_PEAKS]     = {};
     float veto_peak_height[4][fdec::MAX_PEAKS]   = {};
@@ -232,7 +232,7 @@ struct ReconEventData {
 
     //LMS reference PMT information
     int      lms_nch = 0;
-    uint8_t lms_id[4]   = {}; // 0,1,2,3 for lms1-4
+    uint8_t lms_id[4]   = {}; // 1,2,3 for lms 1-3, 0 for lms Pin
     int lms_npeaks[4] = {};
     float lms_peak_time[4][fdec::MAX_PEAKS]     = {};
     float lms_peak_height[4][fdec::MAX_PEAKS]   = {};
