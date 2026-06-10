@@ -118,10 +118,8 @@ int main(int argc, char *argv[])
         // TODO: use config-driven trigger filter (monitor_config.json "physics" section
         // accept_trigger_bits/reject_trigger_bits) instead of hardcoded bit check.
         // Currently drops all non-SSP_RawSum events, including LMS.
-        static constexpr uint32_t TBIT_sum = (1u << 8);
-        static constexpr uint32_t TBIT_lms = (1u << 24);
-        if (!(ev->trigger_bits & TBIT_sum)) continue;
-        if (ev->trigger_bits & TBIT_lms) continue;
+        if (!(ev->trigger_bits & prad2::TBIT_sum)) continue;
+        if (ev->trigger_bits & prad2::TBIT_lms) continue;
 
         // --- HyCal clustering ---
         clusterer.Clear();

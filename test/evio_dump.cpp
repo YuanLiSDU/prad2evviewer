@@ -656,7 +656,7 @@ static int doVtp(EvChannel &ch, int max_events)
 // `max_events=0` falls back to 5; passing -n N caps the printed events while
 // the summary still scans the whole file.
 
-static constexpr double TDC_LSB_NS  = 0.024;     // Sergey: ~24 ps tick
+static constexpr double TDC_LSB_NS  = tdc::TDC_LSB_NS; // 23.436 ps/tick, single source: TdcData.h
 static constexpr uint32_t RF_ROC_TAG = 0x0040;
 
 static int doRf(EvChannel &ch, int max_events)

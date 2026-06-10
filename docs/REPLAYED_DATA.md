@@ -198,13 +198,13 @@ Per-hit bit layout (all words in `tdc_words`):
 | `[31:27]` | `slot`    | V1190/V1290 board slot (0–31) |
 | `[26]`    | `edge`    | 0 = leading, 1 = trailing |
 | `[25:19]` | `channel` | Channel within the board (0–127) |
-| `[18:00]` | `value`   | TDC tick count (LSB ≈ 24 ps after `rol2`'s V1190 → V1290 normalization) |
+| `[18:00]` | `value`   | TDC tick count (LSB = 23.436 ps, calibrated, after `rol2`'s V1190 → V1290 normalization) |
 
 #### Decoding — use the prad2dec helpers, not raw bit shifts
 
 The bit fields above are an implementation detail; analysis code should
 go through `prad2dec` so the calibration constant (`tdc::TDC_LSB_NS =
-0.024`) and the PRad-II RF cabling (`tdc::RF_ROC_TAG / RF_SLOT /
+23.436e-3`) and the PRad-II RF cabling (`tdc::RF_ROC_TAG / RF_SLOT /
 RF_CH_A / RF_CH_B`) live in one place.
 
 **All TDC hits** (RF + future tagger), via `tdc::TdcDecoder::DecodeReplay`:

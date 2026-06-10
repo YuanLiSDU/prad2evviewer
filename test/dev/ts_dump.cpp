@@ -133,7 +133,7 @@ int main(int argc, char *argv[])
                 ? static_cast<double>(event->info.timestamp - first_ts) * TI_TICK_SEC
                 : 0.0;
 
-            bool is_lms = (event->info.trigger_bits & (1u << 16)) != 0;
+            bool is_lms = (event->info.trigger_bits & (1u << 24)) != 0; // LMS = bit 24 (database/trigger_bits.json)
             if (is_lms) lms_count++;
 
             std::cout << std::setw(8)  << event->info.event_number

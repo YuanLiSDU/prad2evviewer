@@ -39,6 +39,16 @@ static constexpr int kMaxGemStrips = ssp::MAX_MPDS * ssp::MAX_APVS_PER_MPD * ssp
 static constexpr int kMaxClusters  = 100;
 static constexpr int kMaxGemHits   = 400;
 
+// ── Front-panel trigger bits ───────────────────────────────────────────────
+//
+// Single source of truth for the FP trigger-bit masks carried in the
+// `trigger_bits` field (multi-bit, from TI master d[5]).  Mind operator
+// precedence when testing — the mask must be parenthesised:
+//   if ((ev.trigger_bits & TBIT_sum) == 0) continue;   // require sum trigger
+static constexpr uint32_t TBIT_sum   = (1u << 8);    // total-energy (sum) trigger
+static constexpr uint32_t TBIT_lms   = (1u << 24);   // LMS light-monitoring
+static constexpr uint32_t TBIT_alpha = (1u << 25);   // alpha / pulser
+
 // ── Module type categorisation ────────────────────────────────────────────
 //
 // Single source of truth at the data-tree level.  Values come from the "t"
@@ -68,8 +78,8 @@ enum ModuleType : uint8_t {
 // (3001..3004 / 3100..3103) are not registered in HyCalSystem.
 //
 // module_id encoding (globally unique across types):
-//   MOD_PbGlass : 1..1156      (matches HyCalSystem G-module IDs)
-//   MOD_PbWO4   : 1001..2152   (HyCal W-module IDs + 1000)
+//   MOD_PbGlass : 1..900       (HyCalSystem G-module IDs; 576 modules, sparse)
+//   MOD_PbWO4   : 1001..2156   (HyCal W-module IDs + 1000; 1152 modules, sparse)
 //   MOD_VETO    : 3001..3004   (V1..V4)
 //   MOD_LMS     : 3100..3103   (LMSPin=3100, LMS1..3 = 3101..3103)
 struct RawEventData {

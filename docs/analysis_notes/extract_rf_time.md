@@ -44,10 +44,10 @@ Each hit word packs:
 bits 31:27  slot     (5 bits)
 bit  26     edge     (0 = leading, 1 = trailing)
 bits 25:19  channel  (7 bits)
-bits 18:00  TDC      (19 bits, LSB ≈ 24 ps — Sergey, 2026-05-05)
+bits 18:00  TDC      (19 bits, LSB = 23.436 ps — Raffaella's calibration; ~24 ps per Sergey, 2026-05-05)
 ```
 
-The LSB calibration constant is `tdc::TDC_LSB_NS = 0.024` (defined
+The LSB calibration constant is `tdc::TDC_LSB_NS = 23.436e-3` (defined
 once in `prad2dec/include/TdcData.h`, mirrored to Python as
 `prad2py.dec.TDC_LSB_NS`). Use it rather than embedding the number in
 analysis code — if the calibration ever changes you only have to fix

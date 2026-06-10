@@ -226,7 +226,7 @@ int main (int argc, char *argv[])
 
         ev->event_num = i;
         ev->trigger_type = 8; // primary_bit 8
-        ev->trigger_bits = (1 << 8); //ssp raw sum
+        ev->trigger_bits = prad2::TBIT_sum; // SSP raw sum
         ev->timestamp = 0;
         ev->total_energy = total_energy;
 

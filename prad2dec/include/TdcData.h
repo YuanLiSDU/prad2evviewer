@@ -26,9 +26,10 @@ namespace tdc
 {
 
 // --- TDC tick calibration --------------------------------------------------
-// Single source of truth for converting the 19-bit TDC value to ns. Sergey
-// Boyarinov (2026-05-05) gives ~24 ps for the rol2-normalized stream; the
-// underlying V1190 LSB after the V1190→V1290 left-shift is 25 ps. Use
+// Single source of truth for converting the 19-bit TDC value to ns. Raffaella's
+// dedicated calibration gives 23.436 ps per TDC channel; earlier estimates from
+// Sergey Boyarinov (2026-05-05) were ~24 ps for the rol2-normalized stream, with
+// the underlying V1190 LSB after the V1190→V1290 left-shift at 25 ps. Use
 // TDC_LSB_NS rather than embedding a magic constant in analysis code.
 static constexpr double TDC_LSB_NS = 23.436e-3; // 23.436 ps per TDC ch, from Raffaella
 

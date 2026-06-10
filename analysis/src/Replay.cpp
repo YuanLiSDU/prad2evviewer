@@ -823,12 +823,9 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
             // TODO: use config-driven trigger filter (monitor_config.json "physics" section
             // accept_trigger_bits/reject_trigger_bits) instead of hardcoded bit check.
             // Currently drops all non-SSP_RawSum events, including LMS.
-            static constexpr uint32_t TBIT_sum = (1u << 8);
-            static constexpr uint32_t TBIT_lms = (1u << 24);
-            static constexpr uint32_t TBIT_alpha = (1u << 25);
-            bool is_sum = (ev->trigger_bits & TBIT_sum) != 0;
-            bool is_lms = (ev->trigger_bits & TBIT_lms) != 0;
-            bool is_alpha = (ev->trigger_bits & TBIT_alpha) != 0;
+            bool is_sum = (ev->trigger_bits & prad2::TBIT_sum) != 0;
+            bool is_lms = (ev->trigger_bits & prad2::TBIT_lms) != 0;
+            bool is_alpha = (ev->trigger_bits & prad2::TBIT_alpha) != 0;
             if (!is_sum && !is_lms && !is_alpha) continue;
 
             // decode FADC250 and reconstruct HyCal data
@@ -1241,8 +1238,8 @@ bool Replay::Process_LMSgainFactor(const std::string &input_evio, const std::str
             //calculate gain correction factors for W modules and fill the gain tree
             //Because the LMS and alpha trigger_bits can not believe, 
             // we need to use "nch" to seperate the LMS and alpha events
-            bool is_lms = ((ev->trigger_bits & (1 << 24)) != 0 || ev->nch > 1000);
-            bool is_alpha = ((ev->trigger_bits & (1 << 25)) != 0 && ev->nch < 50);
+            bool is_lms = ((ev->trigger_bits & prad2::TBIT_lms) != 0 || ev->nch > 1000);
+            bool is_alpha = ((ev->trigger_bits & prad2::TBIT_alpha) != 0 && ev->nch < 50);
             
             if(is_lms) ev->event_type = 0; // LMS event
             if(is_alpha) ev->event_type = 1; // alpha event

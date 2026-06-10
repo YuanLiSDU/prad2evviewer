@@ -39,7 +39,8 @@ namespace fs = std::filesystem;
 using EventVars_Recon = prad2::ReconEventData;
 
 static std::vector<std::string> collectRootFiles(const std::string &path);
-void process_event( TTree *tree, const EventVars_Recon &ev, const fdec::HyCalSystem &hycal, 
+// returns the number of events passing the sum-trigger selection
+long long process_event( TTree *tree, const EventVars_Recon &ev, const fdec::HyCalSystem &hycal,
     std::map<int, TH1F*> &energy_hists, PhysicsTools &physics, float Ebeam, int max_events = -1);
 
 float resolution = 0.035; // pre-defined energy resolution
@@ -111,7 +112,7 @@ int main(int argc, char *argv[]){
     EventVars_Recon ev;
     prad2::SetReconReadBranches(tree, ev);
 
-    process_event(tree, ev, hycal, energy_hists_3p5, physics, 3485.f, max_events);
+    long long n_sum_3p5 = process_event(tree, ev, hycal, energy_hists_3p5, physics, 3485.f, max_events);
 
     // --- repeat for 0.7 GeV data ---
     TChain *chain2 = new TChain("recon");
@@ -127,7 +128,16 @@ int main(int argc, char *argv[]){
 
     EventVars_Recon ev2;
     prad2::SetReconReadBranches(tree2, ev2);
-    process_event(tree2, ev2, hycal, energy_hists_0p7, physics, 729.f, max_events);
+    long long n_sum_0p7 = process_event(tree2, ev2, hycal, energy_hists_0p7, physics, 729.f, max_events);
+
+    // a file with no sum-trigger events would silently produce an all-default
+    // calibration (every module skipped); refuse to write output in that case
+    if (n_sum_3p5 <= 0 || n_sum_0p7 <= 0) {
+        std::cerr << "No sum-trigger events selected (3.5 GeV: " << n_sum_3p5
+                  << ", 0.7 GeV: " << n_sum_0p7
+                  << "); check trigger_bits in the inputs. Aborting before writing calibration.\n";
+        return 1;
+    }
 
     std::string calib_file = dbDir + "/" + "calibration/calibration_factor_3p5_June1.json";
     int nmatched = hycal.LoadCalibration(calib_file);
@@ -168,8 +178,8 @@ int main(int argc, char *argv[]){
 
         int _fit_uid = mod_id * 10;
 
-        // Centroid-based Gaussian fit in [Eexp±6σ]:
-        // weighted-average centroid → initial mean; walk from peak bin to 50% height for fit range.
+        // Peak fit in [Eexp±6σ]: the weighted centroid seeds a two-stage
+        // Gaussian fit (mean±2σ, then mean±1σ); returns the final fitted mean.
         auto fitPeakAndDraw = [&](TH1F *h, double Eexp, double sigma, int color) -> float {
             ++_fit_uid;
             int b0 = std::max(1, h->FindBin(Eexp - 6.*sigma));
@@ -453,20 +463,23 @@ int main(int argc, char *argv[]){
 
 }
 
-void process_event( TTree *tree, const EventVars_Recon &ev, const fdec::HyCalSystem &hycal, 
+long long process_event( TTree *tree, const EventVars_Recon &ev, const fdec::HyCalSystem &hycal,
     std::map<int, TH1F*> &energy_hists, PhysicsTools &physics, float Ebeam, int max_events)
-{   
+{
+    long long n_accepted = 0;
     for (int i = 0; i < tree->GetEntries(); i++) {
-        tree->GetEntry(i);
-        if( i % 1000 == 0) {
-            std::cerr << "Processing event " << i << "/" << tree->GetEntries() << "\r" << std::flush;
-        }
-        if ( ev.trigger_bits & ( 1 << 8) == 0) continue;
+        // entry-count cap; checked before the trigger cut so -n N stops at entry N
         if (max_events > 0 && i >= max_events) {
             std::cerr << "Reached max events limit: " << max_events << "\n";
             break;
         }
-        
+        tree->GetEntry(i);
+        if( i % 1000 == 0) {
+            std::cerr << "Processing event " << i << "/" << tree->GetEntries() << "\r" << std::flush;
+        }
+        if ((ev.trigger_bits & prad2::TBIT_sum) == 0) continue;
+        n_accepted++;
+
         for( int j = 0; j < ev.n_clusters; j++) {
             int mod_id = ev.cl_center[j];
             if (ev.cl_nblocks[j] < 4) continue;
@@ -500,4 +513,5 @@ void process_event( TTree *tree, const EventVars_Recon &ev, const fdec::HyCalSys
             energy_hists[mod_id]->Fill(energy);
         }
     }
+    return n_accepted;
 }

@@ -169,7 +169,8 @@ struct DaqConfig
     //      event_tag = 0x80 + event_type (e.g. 0xB0 = monitoring, 0xA9 = physics).
     //   2. TI master override: d[trigger_type_word] with configured mask/shift.
     //      With tiSetFPInputReadout(1): d[5] = 32-bit FP trigger inputs.
-    //      Bits 16-31 = v1495 triggers, bit 16 = LMS.
+    //      Bit 8 = total-energy sum (SSP0); bits 16-31 = v1495 triggers,
+    //      bit 24 = LMS, bit 25 = alpha (see database/trigger_bits.json).
     int ti_trigger_type_word;
     int ti_trigger_type_shift;
     uint32_t ti_trigger_type_mask;
