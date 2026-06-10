@@ -186,7 +186,7 @@ struct GEMHitCmp {
 };
 
 std::vector<MatchHit> MatchingTools::Match(
-    std::vector<analysis::HCHit> &hycalHits,
+    const std::vector<analysis::HCHit> &hycalHits,
     const std::vector<analysis::GEMHit> &gem1,
     const std::vector<analysis::GEMHit> &gem2,
     const std::vector<analysis::GEMHit> &gem3,
@@ -198,10 +198,12 @@ std::vector<MatchHit> MatchingTools::Match(
     std::set<analysis::GEMHit, GEMHitCmp> used1, used2, used3, used4;
 
     // sort HyCal clusters by energy descending — highest energy matched first
-    std::sort(hycalHits.begin(), hycalHits.end(),
+    /*std::sort(hycalHits.begin(), hycalHits.end(),
               [](const analysis::HCHit &a, const analysis::HCHit &b) {
                   return b.energy < a.energy;
               });
+    */
+    // Note: we don't sort the input hycalHits here, it should already be sorted by energy in the caller (ReconstructHits)
 
     for (size_t i = 0; i < hycalHits.size(); ++i) {
         const auto &hit = hycalHits[i];
@@ -255,7 +257,7 @@ std::vector<MatchHit> MatchingTools::Match(
 // ============================================================================
 
 std::vector<MatchHit_perChamber> MatchingTools::MatchPerChamber(
-    std::vector<analysis::HCHit> &hycalHits,
+    const std::vector<analysis::HCHit> &hycalHits,
     const std::vector<analysis::GEMHit> &gem1,
     const std::vector<analysis::GEMHit> &gem2,
     const std::vector<analysis::GEMHit> &gem3,
@@ -266,6 +268,9 @@ std::vector<MatchHit_perChamber> MatchingTools::MatchPerChamber(
 
     std::vector<MatchHit_perChamber> result;
     result.reserve(hycalHits.size());
+
+    // per-chamber sets of already-claimed GEM hits (pointer identity)
+    std::set<const analysis::GEMHit *> used[4];
 
     for (size_t i = 0; i < hycalHits.size(); ++i) {
         const auto &hit = hycalHits[i];
@@ -285,6 +290,7 @@ std::vector<MatchHit_perChamber> MatchingTools::MatchPerChamber(
 
             for (const auto &g : *planes[d]) {
                 if (!PreMatch(hit, g)) continue;
+                if (used[d].count(&g)) continue; // already claimed by a higher-energy cluster
                 float dist = ProjectionDistance(hit, g);
                 if (dist < best_dist) {
                     best_dist = dist;
@@ -293,6 +299,7 @@ std::vector<MatchHit_perChamber> MatchingTools::MatchPerChamber(
             }
 
             if (best) {
+                used[d].insert(best);
                 mhit.gem_hits[d][0] = best->x;
                 mhit.gem_hits[d][1] = best->y;
                 mhit.gem_hits[d][2] = best->z;

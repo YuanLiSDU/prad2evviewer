@@ -100,6 +100,9 @@ void HyCalCluster::ReconstructHits(std::vector<ClusterHit> &out) const
         if (static_cast<int>(cl.hits.size()) < config_.min_cluster_size) continue;
         out.push_back(reconstruct_pos(cl));
     }
+    std::sort(out.begin(), out.end(), [](const ClusterHit &a, const ClusterHit &b) {
+        return a.energy > b.energy;
+    });
 }
 
 void HyCalCluster::ReconstructMatched(std::vector<RecoResult> &out) const

@@ -44,7 +44,7 @@ class MatchHit
         std::vector<analysis::GEMHit> gem3_hits;
         std::vector<analysis::GEMHit> gem4_hits;
 
-        MatchHit(const analysis::HCHit &hycal_hit, std::vector<analysis::GEMHit> &g1, std::vector<analysis::GEMHit> &g2,
+        MatchHit(const analysis::HCHit &hycal_hit, const std::vector<analysis::GEMHit> &g1, const std::vector<analysis::GEMHit> &g2,
                  const std::vector<analysis::GEMHit> &g3, const std::vector<analysis::GEMHit> &g4)
             : hycal_hit(hycal_hit), gem1_hits(g1), gem2_hits(g2), gem3_hits(g3), gem4_hits(g4) {}
 
@@ -73,13 +73,13 @@ class MatchingTools
 public:
     MatchingTools() = default;
 
-    std::vector<MatchHit> Match(std::vector<analysis::HCHit> &hycalHits,
+    std::vector<MatchHit> Match(const std::vector<analysis::HCHit> &hycalHits,
                             const std::vector<analysis::GEMHit> &gem1_hits,
                             const std::vector<analysis::GEMHit> &gem2_hits,
                             const std::vector<analysis::GEMHit> &gem3_hits,
                             const std::vector<analysis::GEMHit> &gem4_hits) const;
 
-    std::vector<MatchHit_perChamber> MatchPerChamber(std::vector<analysis::HCHit> &hycalHits,
+    std::vector<MatchHit_perChamber> MatchPerChamber(const std::vector<analysis::HCHit> &hycalHits,
                             const std::vector<analysis::GEMHit> &gem1_hits,
                             const std::vector<analysis::GEMHit> &gem2_hits,
                             const std::vector<analysis::GEMHit> &gem3_hits,

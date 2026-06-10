@@ -49,7 +49,7 @@
         {
             "from_run":    24185,
             "beam_energy": 3488.43,
-            "calibration": {"file": "calibration/new_calibration_3p5_June7_nonLinear.json"},
+            "calibration": {"file": "calibration/calibration_factor_3p5_June7.json"},
             "time_cuts":   {"hc_time_window": [130.0, 200.0]},
             "gain_factor": {
                 "data_dir": "",
@@ -65,7 +65,7 @@
         {
             "from_run":    24670,
             "beam_energy": 3485.41,
-            "calibration": {"file": "calibration/new_calibration_3p5_June7_nonLinear.json"},
+            "calibration": {"file": "calibration/calibration_factor_3p5_June7.json"},
             "time_cuts":   {"hc_time_window": [130.0, 200.0]},
             "gain_factor": {
                 "data_dir": "",
