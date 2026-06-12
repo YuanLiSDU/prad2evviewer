@@ -158,9 +158,10 @@ struct RawEventData {
     //   vtp_words       — concatenated payload, bank i occupies
     //                     vtp_words[off..off+vtp_nwords[i]) where off =
     //                     Σ vtp_nwords[0..i-1].
-    // Stored raw so future record-type additions (or the still-
-    // unspecified PRad TRIGGER 0x1D / TAG_EXP 0x1C bit fields) can be
-    // re-decoded offline without rerunning the replay.
+    // Stored raw so future record-type additions (PRAD_CLUSTER — TAG_EXP
+    // 0x1CC, decoded by prad2dec/src/VtpDecoder.cpp — or the still-
+    // unspecified PRad TRIGGER 0x1D bit fields) can be re-decoded offline
+    // without rerunning the replay.
     std::vector<uint32_t> vtp_roc_tags;
     std::vector<uint32_t> vtp_nwords;
     std::vector<uint32_t> vtp_words;
@@ -251,6 +252,17 @@ struct ReconEventData {
     // Raw 0xE10C SSP trigger bank words (one variable-length entry per event)
     std::vector<uint32_t> ssp_raw;
 
+    // Raw 0xE122 VTP bank words — same flat triple-of-vectors layout as
+    // RawEventData above (bank i occupies vtp_words[off..off+vtp_nwords[i])
+    // where off = Σ vtp_nwords[0..i-1]).  Carried on the recon tree so the
+    // PRAD_CLUSTER (TAG_EXP 0x1CC — trigger-level cluster, see
+    // prad2dec/include/VtpData.h) and still-unspecified TRIGGER (0x1D)
+    // payloads can be studied against reconstructed quantities without a
+    // co-replayed raw file.  Cheap: PRad-II VTP banks are 3–7 words per ROC.
+    std::vector<uint32_t> vtp_roc_tags;
+    std::vector<uint32_t> vtp_nwords;
+    std::vector<uint32_t> vtp_words;
+
     // RF reference (decoded from 0xE107 ROC 0x40 slot 16 ch 0 / ch 8).
     // Same content as tdc::RfTimeData but flattened for ROOT storage:
     // rf_ns_a[0..rf_n_a) and rf_ns_b[0..rf_n_b) are the leading-edge ns
@@ -268,9 +280,6 @@ struct ReconEventData {
     // the reference (`prad2::ClusterDeltaRf`).  Per-module offsets from
     // database/hycal_rf_offsets/*.json have already been applied and the
     // result re-folded.  NaN when rf_n_a == 0 for this event.
-    //
-    // Note: 0xE122 VTP raw words still live only in the `events` (raw)
-    // tree.  Offline VTP reconstruction will land here later.
     float cl_dt_rf[kMaxClusters] = {};
 };
 

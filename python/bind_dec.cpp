@@ -7,7 +7,7 @@
 //   prad2py.dec.EventInfo            (per-event metadata)
 //   prad2py.dec.ChannelData / SlotData / RocData / EventData  (fdec)
 //   prad2py.dec.ApvAddress / ApvData / MpdData / SspEventData (ssp)
-//   prad2py.dec.EcPeak / EcCluster / VtpBlock / VtpEventData  (vtp)
+//   prad2py.dec.EcPeak / EcCluster / PradCluster / VtpBlock / VtpEventData  (vtp)
 //   prad2py.dec.TdcHit / TdcEventData                         (tdc)
 //   prad2py.dec.SyncInfo                                      (sync)
 //   prad2py.dec.EpicsStore / EpicsSnapshot                    (slow control)
@@ -814,6 +814,23 @@ void bind_vtp(py::module_ &m)
         .def_readonly("coordV",  &vtp::EcCluster::coordV)
         .def_readonly("coordW",  &vtp::EcCluster::coordW);
 
+    py::class_<vtp::PradCluster>(m, "PradCluster")
+        .def_readonly("roc_tag",  &vtp::PradCluster::roc_tag)
+        .def_readonly("energy",   &vtp::PradCluster::energy)
+        .def_readonly("id",       &vtp::PradCluster::id)
+        .def_readonly("nhits",    &vtp::PradCluster::nhits)
+        .def_readonly("time",     &vtp::PradCluster::time)
+        .def_property_readonly("is_pbwo4", &vtp::PradCluster::is_pbwo4)
+        .def_property_readonly("module",   &vtp::PradCluster::module)
+        .def("__repr__", [](const vtp::PradCluster &c) {
+            char buf[96];
+            snprintf(buf, sizeof(buf),
+                     "PradCluster(roc=0x%X, module=%s%u, E=%u, N=%u, T=%u)",
+                     c.roc_tag, c.is_pbwo4() ? "W" : "G", c.module(),
+                     c.energy, c.nhits, c.time);
+            return std::string(buf);
+        });
+
     py::class_<vtp::VtpBlock>(m, "VtpBlock")
         .def_readonly("roc_tag",          &vtp::VtpBlock::roc_tag)
         .def_readonly("slot",             &vtp::VtpBlock::slot)
@@ -828,9 +845,10 @@ void bind_vtp(py::module_ &m)
 
     py::class_<vtp::VtpEventData, std::shared_ptr<vtp::VtpEventData>>(m, "VtpEventData")
         .def(py::init<>())
-        .def_readonly("n_peaks",    &vtp::VtpEventData::n_peaks)
-        .def_readonly("n_clusters", &vtp::VtpEventData::n_clusters)
-        .def_readonly("n_blocks",   &vtp::VtpEventData::n_blocks)
+        .def_readonly("n_peaks",         &vtp::VtpEventData::n_peaks)
+        .def_readonly("n_clusters",      &vtp::VtpEventData::n_clusters)
+        .def_readonly("n_prad_clusters", &vtp::VtpEventData::n_prad_clusters)
+        .def_readonly("n_blocks",        &vtp::VtpEventData::n_blocks)
         .def("peak",
             [](const vtp::VtpEventData &e, int i) -> const vtp::EcPeak& {
                 if (i < 0 || i >= e.n_peaks)
@@ -843,6 +861,13 @@ void bind_vtp(py::module_ &m)
                 if (i < 0 || i >= e.n_clusters)
                     throw py::index_error("cluster index out of range");
                 return e.clusters[i];
+            },
+            py::return_value_policy::reference_internal)
+        .def("prad_cluster",
+            [](const vtp::VtpEventData &e, int i) -> const vtp::PradCluster& {
+                if (i < 0 || i >= e.n_prad_clusters)
+                    throw py::index_error("prad_cluster index out of range");
+                return e.prad_clusters[i];
             },
             py::return_value_policy::reference_internal)
         .def("block",

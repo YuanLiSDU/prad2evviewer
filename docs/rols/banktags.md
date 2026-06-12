@@ -201,7 +201,7 @@ Max size (~12K words) = physics events with full FADC waveforms.
 
 | Tag    | Type   | Words | Parents                          | Description                                                |
 |--------|--------|-------|----------------------------------|------------------------------------------------------------|
-| 0xE122 | UINT32 | 3     | TI slave crates (0x81/83/85/87/89/8B/8D) | "VTP Hardware Data" (per `clonbanks_20260406.xml`). In TI slave crates it appears as a 3-word stub (block header + trailer + filler) with no event payload — TI slave ROCs have no VTP module, so the bank is essentially empty. The full format is documented below; we'd expect to see useful EC_PEAK / EC_CLUSTER data only if `0xE122` ever appears inside a HyCal FADC crate (`0x80/82/84/86/88/8A/8C`). |
+| 0xE122 | UINT32 | 3-7   | TI slave crates (0x81/83/85/87/89/8B/8D) + 0x96 | "VTP Hardware Data" (per `clonbanks_20260406.xml`). Each HyCal crate's VTP reports through its TI-slave ROC: always EVTHDR (`0x12`) + TRGTIME (`0x13`, 2 words); crates whose VTP found a trigger-level cluster additionally ship **PRAD_CLUSTER** (TAG_EXP `0x1C` with 9-bit tag `0x1CC`, 2 words — seed module / energy / nhits / time) and a TRIGGER (`0x1D`, 2 words) summary. The CLAS12-style EC_PEAK / EC_CLUSTER records are never emitted by the PRad-II firmware. Full format below. |
 
 #### `0xE122` VTP Hardware Data — full format (from official dictionary)
 
@@ -222,7 +222,7 @@ bits[31:23] (tag-expansion subtypes). PRad-II only cares about the ECAL records.
 | `0x19` | CTOF_CLUSTER | (CLAS12, not used) |
 | `0x1A` | CND_CLUSTER | (CLAS12, not used) |
 | `0x1B` | PCU_CLUSTER | (CLAS12, not used) |
-| `0x1C` | Tag-expansion (DC_ROAD, DC_SEGMENT, HPS_*) | (CLAS12/HPS, not used) |
+| `0x1C` | Tag-expansion — subtype in `[26:23]`, full 9-bit tag in `[31:23]` | **PRAD_CLUSTER** = tag `0x1CC` ("0x10+0x0CC" in clonbanks.xml), 2 words: w0 `[13:0]` E; w1 `[26:15]` ID (1-900 → G1-900; bit 11 set → W(`ID & 0x7FF`), shown as 10001-11156 → W1-1156), `[14:11]` N (hits), `[10:0]` T (time). Other subtypes (DC_ROAD, HPS_*) are CLAS12/HPS, not used. |
 | `0x1D` | TRIGGER | `[26:16]` trig_time, `[15:0]` trig_pattern_lo, w1 `[15:0]` trig_pattern_hi |
 | `0x1E` | DNV (data not valid) | skip |
 | `0x1F` | FILLER | skip |
@@ -232,11 +232,18 @@ and supersede the older single-word layouts in `rol2.c` (which appears to be an
 earlier version of the parser).
 
 **Decoder:** `prad2dec/src/VtpDecoder.cpp` parses block headers/trailers,
-EVTHDR, TRGTIME, and stores EC_PEAK / EC_CLUSTER records in
-`vtp::VtpEventData`. CLAS12 records (HTCC, FT, FTOF, CTOF, CND, PCU,
-tag-expansion) are parsed past but not stored. The decoder is invoked by
-`EvChannel::DecodeEvent` whenever a caller passes a `vtp::VtpEventData*`
-(3rd optional argument).
+EVTHDR, TRGTIME, and stores EC_PEAK / EC_CLUSTER / PRAD_CLUSTER records in
+`vtp::VtpEventData`. Other CLAS12 records (HTCC, FT, FTOF, CTOF, CND, PCU,
+non-0x1CC tag-expansions, TRIGGER) are parsed past but not stored. The
+decoder is invoked by `EvChannel::DecodeEvent` whenever a caller passes a
+`vtp::VtpEventData*` (3rd optional argument).
+
+PRAD_CLUSTER was validated against offline HyCal clustering (run 24340,
+19k events): 88% of records share the reconstructed cluster's center
+module and the energy correlation is 0.99 with VTP E ≈ 0.75-0.8 × the
+calibrated cluster energy (trigger-level gains); T peaks sharply at 43
+(fixed trigger latency).  `evio_dump -m vtp <file>` prints the decoded
+fields inline.
 
 ### Banks defined in the official dictionary
 
@@ -276,7 +283,7 @@ tags can be looked up quickly.
 | 0xE11F | UINT32    | SRS Raw Data                                  | not used                                                           |
 | 0xE120 | UINT32    | FASTBUS Raw Data                              | **observed** — used by PRad-1 ADC1881M legacy decoder              |
 | 0xE121 | UINT32    | PGEM crate Raw Data                           | not used (separate GEM crate readout)                              |
-| 0xE122 | UINT32    | VTP Hardware Data                             | **observed in TI slave crates as 3-word stub; decoder in `prad2dec/src/VtpDecoder.cpp`**. Full format documented above (EC_PEAK, EC_CLUSTER, etc.). |
+| 0xE122 | UINT32    | VTP Hardware Data                             | **observed in TI slave crates (3-7 words): EVTHDR + TRGTIME + optional PRAD_CLUSTER / TRIGGER; decoder in `prad2dec/src/VtpDecoder.cpp`**. Full format documented above. |
 | 0xE123 | UINT32    | SSP-RICH Hardware Data                        | reserved in rol1.c, not used in PRad-II                            |
 | 0xE124 | COMPOSITE | SSP-RICH Composite Data                       | not used                                                           |
 | 0xE125 | UINT32    | **SIS3801 Scalers raw format**                | reserved in rol1.c. (Previously misnamed "Per-slot data" — corrected per official dictionary.) |

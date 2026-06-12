@@ -1226,10 +1226,22 @@ int run(const std::vector<std::string> &input_files,
             prad2::SetReconReadBranches(t, ev);
             std::vector<uint32_t> *p_ssp = &ev.ssp_raw;
             if (t->GetBranch("ssp_raw")) t->SetBranchAddress("ssp_raw", &p_ssp);
+            // vtp_* vector branches — same pointer-to-pointer dance as
+            // ssp_raw; recon files older than 2026-06 don't have them
+            // and the cleared vectors just pass through empty.
+            std::vector<uint32_t> *p_vtp_roc = &ev.vtp_roc_tags;
+            std::vector<uint32_t> *p_vtp_nw  = &ev.vtp_nwords;
+            std::vector<uint32_t> *p_vtp_w   = &ev.vtp_words;
+            if (t->GetBranch("vtp_roc_tags")) t->SetBranchAddress("vtp_roc_tags", &p_vtp_roc);
+            if (t->GetBranch("vtp_nwords"))   t->SetBranchAddress("vtp_nwords",   &p_vtp_nw);
+            if (t->GetBranch("vtp_words"))    t->SetBranchAddress("vtp_words",    &p_vtp_w);
             Long64_t n = t->GetEntries();
             if (!split_active) n_in += n;       // split off: every event counts
             for (Long64_t i = 0; i < n; ++i) {
                 ev.ssp_raw.clear();
+                ev.vtp_roc_tags.clear();
+                ev.vtp_nwords.clear();
+                ev.vtp_words.clear();
                 t->GetEntry(i);
                 if (split_active && in_span(s, ev.event_num)) ++n_in;
                 if (is_kept(s, ev.event_num)) {

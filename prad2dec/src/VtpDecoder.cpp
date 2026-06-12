@@ -29,6 +29,11 @@ enum RecordType : uint8_t {
 inline bool is_defining(uint32_t w)       { return (w >> 31) & 0x1; }
 inline uint8_t defining_type(uint32_t w)  { return (w >> 27) & 0x1F; }
 
+// TAG_EXP records extend the type with bits [26:23]; the full 9-bit tag is
+// bits [31:23].  PRAD_CLUSTER is 0x1CC ("0x10+0x0CC" in clonbanks.xml).
+inline uint16_t defining_tag9(uint32_t w) { return (w >> 23) & 0x1FF; }
+constexpr uint16_t TAG9_PRAD_CLUSTER = 0x1CC;
+
 } // namespace
 
 int VtpDecoder::DecodeRoc(const uint32_t *data, size_t nwords,
@@ -44,6 +49,8 @@ int VtpDecoder::DecodeRoc(const uint32_t *data, size_t nwords,
     uint8_t  peak_inst = 0, peak_view = 0, peak_time = 0;
     uint8_t  cluster_inst = 0, cluster_time = 0;
     uint16_t cluster_energy = 0;
+    uint16_t pradcl_energy = 0;
+    bool     pradcl_active = false;   // TAG_EXP defining word was PRAD_CLUSTER
     uint32_t trgtime_lo = 0;
 
     for (size_t i = 0; i < nwords; ++i) {
@@ -114,6 +121,15 @@ int VtpDecoder::DecodeRoc(const uint32_t *data, size_t nwords,
                 break;
             }
 
+            case T_TAG_EXP: {
+                // PRAD_CLUSTER w0: [13:0] energy.  Other expansion tags
+                // are stepped over.
+                pradcl_active = (defining_tag9(w) == TAG9_PRAD_CLUSTER);
+                if (pradcl_active)
+                    pradcl_energy = w & 0x3FFF;
+                break;
+            }
+
             // Types we parse past but don't store (CLAS12/HPS records,
             // PRad TRIGGER summary, DNV, FILLER).
             default:
@@ -159,6 +175,21 @@ int VtpDecoder::DecodeRoc(const uint32_t *data, size_t nwords,
                     c.coordW  = (w >> 20) & 0x3FF;
                     c.coordV  = (w >> 10) & 0x3FF;
                     c.coordU  = w & 0x3FF;
+                    ++records_decoded;
+                }
+                break;
+            }
+
+            case T_TAG_EXP: {
+                // PRAD_CLUSTER w1: [26:15] id, [14:11] nhits, [10:0] time.
+                if (pradcl_active && cur_cont == 1
+                    && evt.n_prad_clusters < MAX_PRAD_CLUSTERS) {
+                    PradCluster &c = evt.prad_clusters[evt.n_prad_clusters++];
+                    c.roc_tag = roc_tag;
+                    c.energy  = pradcl_energy;
+                    c.id      = (w >> 15) & 0xFFF;
+                    c.nhits   = (w >> 11) & 0xF;
+                    c.time    = w & 0x7FF;
                     ++records_decoded;
                 }
                 break;

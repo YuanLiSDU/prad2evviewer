@@ -167,10 +167,15 @@ Decoder reference: each defining word has bit 31 = 1 with the record
 type in bits `[30:27]` (`0x10` = BLKHDR, `0x11` = BLKTLR, `0x12` =
 EVTHDR, `0x13` = TRGTIME, `0x14` = EC_PEAK, `0x15` = EC_CLUSTER,
 `0x1C` = TAG_EXP, `0x1D` = PRad TRIGGER summary, `0x1F` = FILLER).
-See `prad2dec/src/VtpDecoder.cpp` for the bit-field layout of each
-type that's currently parsed.  PRad-II runs typically ship only
-EVTHDR + TRGTIME on most ROCs, plus TRIGGER and TAG_EXP on the
-trigger-master VTP — `evio_dump -m vtp <file>` is the quick inspector.
+PRad-II runs ship EVTHDR + TRGTIME on every HyCal VTP ROC; crates whose
+VTP found a trigger-level cluster additionally ship **PRAD_CLUSTER**
+(a TAG_EXP expansion with 9-bit tag `[31:23]` = `0x1CC`: w0 `[13:0]`
+energy; w1 `[26:15]` seed module id, `[14:11]` nhits, `[10:0]` time —
+see `docs/rols/banktags.md` for the module-id encoding) plus a TRIGGER
+summary.  `VtpDecoder.cpp` stores PRAD_CLUSTER in
+`VtpEventData.prad_clusters`; validated against offline clustering at
+0.99 energy correlation.  `evio_dump -m vtp <file>` is the quick
+inspector and prints the decoded fields inline.
 
 ### TDC raw banks — always written
 
@@ -263,13 +268,17 @@ upstream — only physics events reach the tree.
 | `timestamp`    | `int64`          | 48-bit TI timestamp (250 MHz ticks) |
 | `total_energy` | `float`          | Σ HyCal cluster energy (MeV) |
 | `ssp_raw`      | `vector<uint32>` | Raw 0xE10C SSP trigger bank words |
+| `vtp_roc_tags` | `vector<uint32>` | Parent ROC tag for each 0xE122 VTP bank (same encoding as the events tree — see "VTP raw banks" above) |
+| `vtp_nwords`   | `vector<uint32>` | Word count per VTP bank, parallel to `vtp_roc_tags` |
+| `vtp_words`    | `vector<uint32>` | Concatenated VTP bank payload — bank `i` occupies `vtp_words[Σ vtp_nwords[0..i-1] .. +vtp_nwords[i])` |
 
-The recon tree intentionally does NOT carry the raw `vtp_*` and `tdc_*`
-branches that the events tree has — they're for offline reconstruction
-that hasn't landed yet (decoded VTP trigger info and an RF-time scalar).
-For now, read the raw words from a co-replayed `*_raw.root` file when
-you need them, or rerun `prad2ana_replay_rawdata` and use the events
-tree directly.
+The `vtp_*` triple was added to the recon tree in 2026-06 (PRad-II VTP
+banks are only 3–7 words per ROC, so the cost is negligible) so the
+still-unspecified TRIGGER `0x1D` / TAG_EXP `0x1C` payloads can be studied
+against reconstructed quantities; recon files replayed earlier don't have
+it.  Raw `tdc_*` words are still NOT carried here — the RF reference they
+hold arrives decoded in the `rf_n_a/rf_ns_a/...` branches below; for the
+raw hits use a co-replayed `*_raw.root` events tree.
 
 ### HyCal clusters
 

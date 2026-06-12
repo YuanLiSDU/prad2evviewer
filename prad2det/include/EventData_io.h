@@ -54,6 +54,7 @@ struct ReconReadStatus {
     bool has_veto       = false;
     bool has_lms        = false;
     bool has_ssp_raw    = false;
+    bool has_vtp_raw    = false;   // vtp_roc_tags + vtp_nwords + vtp_words
     bool has_rf         = false;   // rf_n_a/b + rf_ns_a/b + cl_dt_rf
 };
 
@@ -313,6 +314,13 @@ inline void SetReconWriteBranches(TTree *tree, ReconEventData &ev)
     // Raw 0xE10C SSP trigger bank words.
     tree->Branch("ssp_raw", &ev.ssp_raw);
 
+    // Raw 0xE122 VTP bank words — same flat triple as the raw events
+    // tree, kept so PRAD_CLUSTER (TAG_EXP 0x1CC) / TRIGGER (0x1D)
+    // payloads can be re-decoded against reconstructed quantities.
+    tree->Branch("vtp_roc_tags", &ev.vtp_roc_tags);
+    tree->Branch("vtp_nwords",   &ev.vtp_nwords);
+    tree->Branch("vtp_words",    &ev.vtp_words);
+
     // RF reference + per-cluster folded Δt.  See ReconEventData and
     // prad2det/include/RfTime.h for the folding rule.
     tree->Branch("rf_n_a",   &ev.rf_n_a,   "rf_n_a/b");
@@ -322,10 +330,6 @@ inline void SetReconWriteBranches(TTree *tree, ReconEventData &ev)
     tree->Branch("rf_ns_b",  ev.rf_ns_b,
                  Form("rf_ns_b[%d]/F", tdc::RfTimeData::MAX_HITS_PER_CH));
     tree->Branch("cl_dt_rf", ev.cl_dt_rf, "cl_dt_rf[n_clusters]/F");
-
-    // Note: VTP raw words intentionally NOT written here — the recon
-    // tree is for reconstructed quantities only.  See the comment in
-    // ReconEventData for the planned offline VTP reconstruction.
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -411,6 +415,13 @@ inline ReconReadStatus SetReconReadBranches(TTree *tree, ReconEventData &ev)
 
     // ssp_raw — see note in SetRawReadBranches.
     s.has_ssp_raw = (tree->GetBranch("ssp_raw") != nullptr);
+
+    // vtp_* — same vector-pointer pattern as ssp_raw; consumers bind
+    // their own held pointers.  Present on recon files replayed after
+    // 2026-06; older files just leave has_vtp_raw false.
+    s.has_vtp_raw = (tree->GetBranch("vtp_words")    != nullptr)
+                    && (tree->GetBranch("vtp_nwords")   != nullptr)
+                    && (tree->GetBranch("vtp_roc_tags") != nullptr);
 
     // RF branches — present on recon files replayed after 2026-05.
     s.has_rf = (tree->GetBranch("rf_n_a") != nullptr);

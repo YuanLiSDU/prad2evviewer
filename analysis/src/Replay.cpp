@@ -163,6 +163,9 @@ void Replay::clearReconEvent(EventVars_Recon &ev)
     ev.veto_nch = 0;
     ev.lms_nch = 0;
     ev.ssp_raw.clear();
+    ev.vtp_roc_tags.clear();
+    ev.vtp_nwords.clear();
+    ev.vtp_words.clear();
     std::fill(std::begin(ev.veto_npeaks), std::end(ev.veto_npeaks), 0);
     std::fill(&ev.veto_peak_time[0][0],     &ev.veto_peak_time[0][0]     + 4 * fdec::MAX_PEAKS, 0.f);
     std::fill(&ev.veto_peak_height[0][0],   &ev.veto_peak_height[0][0]   + 4 * fdec::MAX_PEAKS, 0.f);
@@ -345,8 +348,8 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
         // Snapshot every 0xE122 VTP bank for this read group.  Up to ~9
         // banks per event (7 HyCal VTPs + 2 GEM VTPs in mixed-detector
         // runs); kept verbatim along with the parent ROC tag so offline
-        // tools can re-decode TRIGGER (0x1D) / TAG_EXP (0x1C) / etc.
-        // without needing the EVIO file.  Flat encoding (parallel
+        // tools can re-decode PRAD_CLUSTER (TAG_EXP 0x1CC) / TRIGGER
+        // (0x1D) / etc. without needing the EVIO file.  Flat encoding (parallel
         // vector<uint32_t>) avoids needing a custom ROOT dictionary for
         // nested STL collections.
         std::vector<uint32_t> vtp_roc_tags_snapshot;
@@ -755,11 +758,35 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
             ssp_raw_snapshot.assign(p, p + n_e10c->data_words);
         }
 
+        // Snapshot every 0xE122 VTP bank for this read group — same flat
+        // triple as the raw-replay snapshot in Process(); lands on the
+        // recon tree so PRAD_CLUSTER (TAG_EXP 0x1CC) / TRIGGER (0x1D)
+        // payloads stay available next to reconstructed quantities.
+        std::vector<uint32_t> vtp_roc_tags_snapshot;
+        std::vector<uint32_t> vtp_nwords_snapshot;
+        std::vector<uint32_t> vtp_words_snapshot;
+        {
+            const auto &all_nodes = ch.GetNodes();
+            for (auto *n_vtp : ch.FindByTag(0xE122)) {
+                if (n_vtp->data_words == 0) continue;
+                if (n_vtp->parent >= 0
+                    && all_nodes[n_vtp->parent].type == evc::DATA_COMPOSITE)
+                    continue;
+                uint32_t roc = (n_vtp->parent >= 0)
+                    ? all_nodes[n_vtp->parent].tag : 0;
+                const uint32_t *p = ch.GetData(*n_vtp);
+                vtp_roc_tags_snapshot.push_back(roc);
+                vtp_nwords_snapshot.push_back(
+                    static_cast<uint32_t>(n_vtp->data_words));
+                vtp_words_snapshot.insert(vtp_words_snapshot.end(),
+                                          p, p + n_vtp->data_words);
+            }
+        }
+
         // Snapshot every 0xE107 V1190/V1290 TDC bank for this read group
         // so the recon path can compute per-cluster RF Δt without going
         // back to the raw tree.  Mirrors the raw-replay snapshot in
         // Process() — see the long comment there for the bit layout.
-        // (0xE122 VTP raw words are still intentionally NOT carried here.)
         std::vector<uint32_t> tdc_roc_tags_snapshot;
         std::vector<uint32_t> tdc_nwords_snapshot;
         std::vector<uint32_t> tdc_words_snapshot;
@@ -803,6 +830,9 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
             ev->trigger_bits = event->info.trigger_bits;
             ev->timestamp    = event->info.timestamp;
             ev->ssp_raw      = ssp_raw_snapshot;
+            ev->vtp_roc_tags = vtp_roc_tags_snapshot;
+            ev->vtp_nwords   = vtp_nwords_snapshot;
+            ev->vtp_words    = vtp_words_snapshot;
 
             // Decode RF reference once per event from the TDC bank
             // snapshot.  Channel A/B leading-edge ns arrays land on the

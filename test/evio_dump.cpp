@@ -431,12 +431,12 @@ static int doEpics(EvChannel &ch, int max_events)
 // --- mode: vtp --------------------------------------------------------------
 // Walks physics events, dumps the raw 0xE122 VTP banks word-by-word with
 // per-word record-type decoding (BLKHDR/BLKTLR/EVTHDR/TRGTIME/EC_PEAK/
-// EC_CLUSTER/PRAD_TRIGGER/...), and runs ch.Vtp() to show what the current
-// decoder turns each bank into.  The raw view is the ground truth — the
-// PRad-II VTP firmware is a CLAS12 derivative, so some record types
-// (PRAD_TRIGGER 0x1D in particular) ship through the current decoder
-// unstored.  Keeping both raw and decoded side by side is what lets you
-// confirm whether plumbing more record types into VtpEventData is worth it.
+// EC_CLUSTER/PRAD_CLUSTER/PRAD_TRIGGER/...), and runs ch.Vtp() to show what
+// the current decoder turns each bank into.  The raw view is the ground
+// truth — the PRad-II VTP firmware is a CLAS12 derivative; trigger-level
+// HyCal clusters ship as PRAD_CLUSTER (a TAG_EXP expansion, 9-bit tag
+// bits[31:23] = 0x1CC per $CLON_PARMS/clonbanks.xml), while PRAD_TRIGGER
+// 0x1D still ships through the decoder unstored.
 //
 // `max_events=0` falls back to 5 events.
 
@@ -471,6 +471,7 @@ static int doVtp(EvChannel &ch, int max_events)
 
     int physics_seen = 0, physics_with_vtp = 0, dumped = 0;
     int total_blocks = 0, total_peaks = 0, total_clusters = 0;
+    int total_prad_clusters = 0;
     std::map<uint8_t, int> rectype_counts;       // across all dumped events
 
     while (ch.Read() == status::success) {
@@ -516,6 +517,7 @@ static int doVtp(EvChannel &ch, int max_events)
                 // words are printed indented under the most recent
                 // defining word so the structure reads top-down.
                 uint8_t cur_type = 0;
+                bool cur_pradcl = false;  // last TAG_EXP was PRAD_CLUSTER (tag9 0x1CC)
                 for (size_t i = 0; i < np->data_words; ++i) {
                     uint32_t w = d[i];
                     bool defining = (w >> 31) & 0x1;
@@ -525,6 +527,8 @@ static int doVtp(EvChannel &ch, int max_events)
                     if (defining) {
                         cur_type = (w >> 27) & 0x1F;
                         rectype_counts[cur_type]++;
+                        if (cur_type == 0x1C)
+                            cur_pradcl = (((w >> 23) & 0x1FF) == 0x1CC);
                         std::cout << vtp_record_name(cur_type)
                                   << " (0x" << std::hex << int(cur_type)
                                   << std::dec << ")";
@@ -555,6 +559,14 @@ static int doVtp(EvChannel &ch, int max_events)
                                       << " time=" << ((w >> 16) & 0xFF)
                                       << " energy=" << (w & 0xFFFF);
                             break;
+                        case 0x1C:  // TAG_EXP — PRAD_CLUSTER if tag9 == 0x1CC
+                            if (cur_pradcl)
+                                std::cout << "  PRAD_CLUSTER  E="
+                                          << (w & 0x3FFF);
+                            else
+                                std::cout << "  tag9=0x" << std::hex
+                                          << ((w >> 23) & 0x1FF) << std::dec;
+                            break;
                         case 0x1D:  // PRad TRIGGER summary
                             std::cout << "  payload=0x" << std::hex
                                       << (w & 0x07FFFFFF) << std::dec;
@@ -578,6 +590,16 @@ static int doVtp(EvChannel &ch, int max_events)
                                       << " V=" << ((w >> 10) & 0x3FF)
                                       << " W=" << ((w >> 20) & 0x3FF);
                             break;
+                        case 0x1C:  // PRAD_CLUSTER w1: id / nhits / time
+                            if (cur_pradcl) {
+                                uint32_t id = (w >> 15) & 0xFFF;
+                                std::cout << "  module="
+                                          << ((id & 0x800) ? "W" : "G")
+                                          << ((id & 0x800) ? (id & 0x7FF) : id)
+                                          << " N=" << ((w >> 11) & 0xF)
+                                          << " T=" << (w & 0x7FF);
+                            }
+                            break;
                         case 0x1D:
                             std::cout << "  payload=0x" << std::hex
                                       << w << std::dec;
@@ -594,7 +616,8 @@ static int doVtp(EvChannel &ch, int max_events)
             const auto &v = ch.Vtp();
             std::cout << "  decoder kept: blocks=" << v.n_blocks
                       << " peaks=" << v.n_peaks
-                      << " clusters=" << v.n_clusters << "\n";
+                      << " clusters=" << v.n_clusters
+                      << " prad_clusters=" << v.n_prad_clusters << "\n";
             for (int b = 0; b < v.n_blocks; ++b) {
                 const auto &bk = v.blocks[b];
                 std::cout << "    block[" << b << "] roc=" << hex(bk.roc_tag)
@@ -623,6 +646,17 @@ static int doVtp(EvChannel &ch, int max_events)
                           << " energy=" << cl.energy << "\n";
                 total_clusters++;
             }
+            for (int c = 0; c < v.n_prad_clusters; ++c) {
+                const auto &cl = v.prad_clusters[c];
+                std::cout << "    prad_cluster[" << c << "] roc="
+                          << hex(cl.roc_tag)
+                          << " module=" << (cl.is_pbwo4() ? "W" : "G")
+                          << cl.module()
+                          << " E=" << cl.energy
+                          << " N=" << int(cl.nhits)
+                          << " T=" << cl.time << "\n";
+                total_prad_clusters++;
+            }
             std::cout << "\n";
         }
     }
@@ -632,7 +666,8 @@ static int doVtp(EvChannel &ch, int max_events)
               << dumped << ".\n"
               << "Decoder totals across dumped events: blocks=" << total_blocks
               << " peaks=" << total_peaks
-              << " clusters=" << total_clusters << "\n"
+              << " clusters=" << total_clusters
+              << " prad_clusters=" << total_prad_clusters << "\n"
               << "Record-type tally (defining words seen):\n";
     for (const auto &kv : rectype_counts) {
         std::cout << "  0x" << std::hex << int(kv.first) << std::dec
