@@ -71,7 +71,11 @@
                 "data_dir": "",
                 "ref_run":  24827
             }
-        }
+        },
+		{
+			"from_run":    25200,
+			"beam_energy": 2239.51
+		}
     ],
 
     "// Per-run GEM pedestals + common-mode range.  Bumping pedestals on a":                                                          "",
