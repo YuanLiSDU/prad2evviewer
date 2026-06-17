@@ -280,6 +280,21 @@ it.  Raw `tdc_*` words are still NOT carried here — the RF reference they
 hold arrives decoded in the `rf_n_a/rf_ns_a/...` branches below; for the
 raw hits use a co-replayed `*_raw.root` events tree.
 
+### VTP PRAD_CLUSTER trigger clusters
+
+`vtp_cl_n` ≤ 256.  Decoded convenience view of PRAD_CLUSTER records
+(`0x1CC`) from the VTP raw banks above.  Firmware quantities are kept
+as-is: `vtp_cl_time` is not converted to ns, and `vtp_cl_energy` is not
+an offline-calibrated MeV energy.
+
+| Branch | Type | Meaning |
+|---|---|---|
+| `vtp_cl_n`      | `int`              | Number of decoded VTP PRAD_CLUSTER records in this event |
+| `vtp_cl_time`   | `uint16[vtp_cl_n]` | Raw 11-bit PRAD_CLUSTER time field |
+| `vtp_cl_energy` | `uint16[vtp_cl_n]` | Raw 14-bit trigger-level energy sum |
+| `vtp_cl_center` | `uint16[vtp_cl_n]` | Seed module ID in the same numbering as `cl_center` (`G1..900`, `W1001..2156`) |
+| `vtp_cl_blocks` | `uint8[vtp_cl_n]`  | PRAD_CLUSTER `nhits` field, number of modules in the trigger cluster |
+
 ### HyCal clusters
 
 `n_clusters` ≤ 100.  Lab frame (target-centered, beam-aligned, mm).
