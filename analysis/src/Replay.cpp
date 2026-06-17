@@ -175,6 +175,13 @@ void Replay::clearReconEvent(EventVars_Recon &ev)
     std::fill(&ev.lms_peak_height[0][0],   &ev.lms_peak_height[0][0]   + 4 * fdec::MAX_PEAKS, 0.f);
     std::fill(&ev.lms_peak_integral[0][0], &ev.lms_peak_integral[0][0] + 4 * fdec::MAX_PEAKS, 0.f);
 
+    // VTP PRAD_CLUSTER online trigger data
+    ev.vtp_cl_n = 0;
+    std::fill(&ev.vtp_cl_time[0],   &ev.vtp_cl_time[0]   + vtp::MAX_PRAD_CLUSTERS, 0);
+    std::fill(&ev.vtp_cl_energy[0], &ev.vtp_cl_energy[0] + vtp::MAX_PRAD_CLUSTERS, 0);
+    std::fill(&ev.vtp_cl_center[0], &ev.vtp_cl_center[0] + vtp::MAX_PRAD_CLUSTERS, 0);
+    std::fill(&ev.vtp_cl_blocks[0], &ev.vtp_cl_blocks[0] + vtp::MAX_PRAD_CLUSTERS, 0);
+
     // RF reference + per-cluster folded Δt.  Default cl_dt_rf to NaN so
     // analysis can tell "event filtered before clustering" apart from
     // "Δt = 0 ns" without inspecting a separate sentinel branch.
@@ -833,6 +840,19 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
             ev->vtp_roc_tags = vtp_roc_tags_snapshot;
             ev->vtp_nwords   = vtp_nwords_snapshot;
             ev->vtp_words    = vtp_words_snapshot;
+
+            // VTP PRAD_CLUSTER online trigger data
+            const auto &vtp_event = ch.Vtp();
+            for (int i = 0; i < vtp_event.n_prad_clusters; ++i) {
+                auto vtp_prad_clusters = vtp_event.prad_clusters[i];
+                ev->vtp_cl_time[ev->vtp_cl_n] = vtp_prad_clusters.time;
+                ev->vtp_cl_energy[ev->vtp_cl_n] = vtp_prad_clusters.energy;
+                uint16_t i_module = vtp_prad_clusters.module();
+                if(vtp_prad_clusters.is_pbwo4()) i_module += 1000;
+                ev->vtp_cl_center[ev->vtp_cl_n] = i_module;
+                ev->vtp_cl_blocks[ev->vtp_cl_n] = vtp_prad_clusters.nhits;
+                ev->vtp_cl_n++;
+            }
 
             // Decode RF reference once per event from the TDC bank
             // snapshot.  Channel A/B leading-edge ns arrays land on the

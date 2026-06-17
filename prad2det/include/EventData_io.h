@@ -55,6 +55,7 @@ struct ReconReadStatus {
     bool has_lms        = false;
     bool has_ssp_raw    = false;
     bool has_vtp_raw    = false;   // vtp_roc_tags + vtp_nwords + vtp_words
+    bool has_vtp_cl     = false;   // vtp_cl_n + vtp_cl_time + vtp_cl_energy + vtp_cl_center + vtp_cl_blocks
     bool has_rf         = false;   // rf_n_a/b + rf_ns_a/b + cl_dt_rf
 };
 
@@ -321,6 +322,13 @@ inline void SetReconWriteBranches(TTree *tree, ReconEventData &ev)
     tree->Branch("vtp_nwords",   &ev.vtp_nwords);
     tree->Branch("vtp_words",    &ev.vtp_words);
 
+    // VTP PRAD_CLUSTER online trigger data
+    tree->Branch("vtp_cl_n",      &ev.vtp_cl_n,      "vtp_cl_n/I");
+    tree->Branch("vtp_cl_time",   ev.vtp_cl_time,    "vtp_cl_time[vtp_cl_n]/s");
+    tree->Branch("vtp_cl_energy", ev.vtp_cl_energy,  "vtp_cl_energy[vtp_cl_n]/s");
+    tree->Branch("vtp_cl_center", ev.vtp_cl_center,  "vtp_cl_center[vtp_cl_n]/s");
+    tree->Branch("vtp_cl_blocks", ev.vtp_cl_blocks,  "vtp_cl_blocks[vtp_cl_n]/b");
+
     // RF reference + per-cluster folded Δt.  See ReconEventData and
     // prad2det/include/RfTime.h for the folding rule.
     tree->Branch("rf_n_a",   &ev.rf_n_a,   "rf_n_a/b");
@@ -422,6 +430,16 @@ inline ReconReadStatus SetReconReadBranches(TTree *tree, ReconEventData &ev)
     s.has_vtp_raw = (tree->GetBranch("vtp_words")    != nullptr)
                     && (tree->GetBranch("vtp_nwords")   != nullptr)
                     && (tree->GetBranch("vtp_roc_tags") != nullptr);
+
+    // VTP PRAD_CLUSTER online trigger data — present on recon files replayed after 2026-06.
+    s.has_vtp_cl = (tree->GetBranch("vtp_cl_n") != nullptr);
+    if (s.has_vtp_cl) {
+        bind("vtp_cl_n",      &ev.vtp_cl_n);
+        bind("vtp_cl_time",   ev.vtp_cl_time);
+        bind("vtp_cl_energy", ev.vtp_cl_energy);
+        bind("vtp_cl_center", ev.vtp_cl_center);
+        bind("vtp_cl_blocks", ev.vtp_cl_blocks);
+    }
 
     // RF branches — present on recon files replayed after 2026-05.
     s.has_rf = (tree->GetBranch("rf_n_a") != nullptr);

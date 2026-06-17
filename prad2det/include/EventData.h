@@ -18,6 +18,7 @@
 #include "Fadc250Data.h"   // MAX_SAMPLES, MAX_PEAKS, MAX_ROCS, MAX_SLOTS
 #include "SspData.h"       // MAX_MPDS, MAX_APVS_PER_MPD, APV_STRIP_SIZE, SSP_TIME_SAMPLES
 #include "TdcData.h"       // RfTimeData::MAX_HITS_PER_CH
+#include "VtpData.h"       // vtp::MAX_PRAD_CLUSTERS
 
 #include <cstdint>
 #include <string>
@@ -262,6 +263,13 @@ struct ReconEventData {
     std::vector<uint32_t> vtp_roc_tags;
     std::vector<uint32_t> vtp_nwords;
     std::vector<uint32_t> vtp_words;
+
+    //Decoded VTP PRAD_CLUSTER online trigger data
+    int vtp_cl_n = 0; // number of PRAD_CLUSTER online trigger clusters
+    uint16_t vtp_cl_time[vtp::MAX_PRAD_CLUSTERS] = {};
+    uint16_t vtp_cl_energy[vtp::MAX_PRAD_CLUSTERS] = {};
+    uint16_t vtp_cl_center[vtp::MAX_PRAD_CLUSTERS] = {};
+    uint8_t vtp_cl_blocks[vtp::MAX_PRAD_CLUSTERS] = {};
 
     // RF reference (decoded from 0xE107 ROC 0x40 slot 16 ch 0 / ch 8).
     // Same content as tdc::RfTimeData but flattened for ROOT storage:
