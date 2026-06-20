@@ -439,13 +439,14 @@ ClusterHit HyCalCluster::reconstruct_pos(const ModuleCluster &cl) const
     result.flag      = cl.flag;
     result.linear_corr = 1.f;
 
-    //non-linearity correction: E + nl * (E - E_cal) / 1000
-    float cal_non_linear = sys_.GetCalibNonLinearity(center_mod.id);
+    //non-linearity correction: 
+    // 1./linear_corr = E_rec/E_exp = 1 + nl1*(E_rec-E_base)/1000 + nl2*((E_rec-E_base)/1000)^2
+    float cal_non_linear_1 = sys_.GetCalibNonLinearity1(center_mod.id);
+    float cal_non_linear_2 = sys_.GetCalibNonLinearity2(center_mod.id);
     float cal_base_energy = sys_.GetCalibBaseEnergy(center_mod.id);
-    if (cal_non_linear != 0.f && cl.energy > 0.f) {
-        result.energy = cl.energy + cal_non_linear * (cl.energy - cal_base_energy) / 1000.f;
-        result.linear_corr = result.energy / cl.energy;
-    }
+    result.linear_corr = 1.f / (1.f + cal_non_linear_1 * (cl.energy - cal_base_energy) / 1000.f + 
+        cal_non_linear_2 * (cl.energy - cal_base_energy) * (cl.energy - cal_base_energy) / (1000.f * 1000.f));
+    result.energy = cl.energy * result.linear_corr;
 
     if (wtot > 0.f) {
         result.x = center_mod.x + (wx / wtot) * center_mod.size_x;

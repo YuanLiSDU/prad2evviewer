@@ -133,7 +133,8 @@ struct Module {
     // calibration (per-module)
     double      cal_factor      = 0.;   // MeV per ADC count (or per integral unit)
     double      cal_base_energy = 0.;   // calibration beam energy (MeV)
-    double      cal_non_linear  = 0.;   // non-linear correction coefficient
+    double      cal_non_linear_1  = 0.;   // 1st order non-linear correction coefficient
+    double      cal_non_linear_2  = 0.;   // 2nd order non-linear correction coefficient
 
     // convert ADC value (pedestal-subtracted) to energy in MeV
     double energize(double adc) const {
@@ -184,7 +185,7 @@ public:
     bool Init(const std::string &map_path);
 
     // Load per-module calibration from JSON file.
-    // Format: [{"name":"W735","factor":0.37,"base_energy":2138.67,"non_linear":0.006}, ...]
+    // Format: [{"name":"W735","factor":0.37,"base_energy":2138.67,"nl1":0.006,"nl2":0.0}, ...]
     // Returns number of modules matched, or -1 on error.
     int LoadCalibration(const std::string &calib_path);
 
@@ -199,10 +200,12 @@ public:
     // --- calibration accessors ----------------------------------------------
     double GetCalibConstant(int primex_id) const;
     double GetCalibBaseEnergy(int primex_id) const;
-    double GetCalibNonLinearity(int primex_id) const;
+    double GetCalibNonLinearity1(int primex_id) const;
+    double GetCalibNonLinearity2(int primex_id) const;
     void   SetCalibConstant(int primex_id, double factor);
     void   SetCalibBaseEnergy(int primex_id, double energy);
     void   SetCalibNonLinearity(int primex_id, double nl);
+    void   SetCalibNonLinearity(int primex_id, double nl1, double nl2);
     void   PrintCalibConstants(const std::string &output_file) const;
 
     // --- sector info --------------------------------------------------------

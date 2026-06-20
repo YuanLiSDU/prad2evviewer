@@ -41,7 +41,7 @@
         {
             "from_run":    0,
             "beam_energy": 2108.8,
-            "calibration": {"file": "calibration/calibration_factor_3p5_June7.json"},
+            "calibration": {"file": "calibration/calibration_factor_3p5_June7_nonLinear.json"},
             "time_cuts":   {"hc_time_window": [60.0, 400.0]},
             "gain_factor": {"data_dir": "", 
             "ref_run": 24827}
@@ -49,7 +49,7 @@
         {
             "from_run":    24185,
             "beam_energy": 3488.43,
-            "calibration": {"file": "calibration/calibration_factor_3p5_June7.json"},
+            "calibration": {"file": "calibration/calibration_factor_3p5_June7_nonLinear.json"},
             "time_cuts":   {"hc_time_window": [130.0, 200.0]},
             "gain_factor": {
                 "data_dir": "",
@@ -65,7 +65,7 @@
         {
             "from_run":    24670,
             "beam_energy": 3485.41,
-            "calibration": {"file": "calibration/calibration_factor_3p5_June7.json"},
+            "calibration": {"file": "calibration/calibration_factor_3p5_June7_nonLinear.json"},
             "time_cuts":   {"hc_time_window": [130.0, 200.0]},
             "gain_factor": {
                 "data_dir": "",

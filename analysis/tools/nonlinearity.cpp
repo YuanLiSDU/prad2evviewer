@@ -19,6 +19,8 @@
 #include <TChain.h>
 #include <TMarker.h>
 #include <TLegend.h>
+#include <TROOT.h>
+#include <TClass.h>
 
 #include <iostream>
 #include <string>
@@ -27,6 +29,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <algorithm>
+#include <thread>
+#include <mutex>
 #include <unistd.h>
 
 #ifndef DATABASE_DIR
@@ -40,10 +44,15 @@ using EventVars_Recon = prad2::ReconEventData;
 
 static std::vector<std::string> collectRootFiles(const std::string &path);
 // returns the number of events passing the sum-trigger selection
-long long process_event( TTree *tree, const EventVars_Recon &ev, const fdec::HyCalSystem &hycal,
-    std::map<int, TH1F*> &energy_hists, PhysicsTools &physics, float Ebeam, int max_events = -1);
+long long process_event( bool use_GEM, TTree *tree, const EventVars_Recon &ev, const fdec::HyCalSystem &hycal,
+    std::map<int, TH1F*> &energy_hists, PhysicsTools &physics, float Ebeam, int max_events = -1,
+    const std::string &label = "", std::mutex *io_mtx = nullptr);
 
 float resolution = 0.035; // pre-defined energy resolution
+
+float E3p5 = 3485.41f; // Energy for 3.5 GeV beam
+float E2p2 = 2239.51f; // Energy for 2.2 GeV beam
+float E0p7 = 728.9f;  // Energy for 0.7 GeV beam
 
 bool Vetoed(float cl_time, float sci_time, float sci_int){
     // Simple veto logic: if the cluster time is within a certain window of the scintillator time, and the scintillator signal is above a threshold, we consider it a vetoed event.
@@ -54,18 +63,27 @@ bool Vetoed(float cl_time, float sci_time, float sci_int){
 }
 
 int main(int argc, char *argv[]){
+    // ROOT multi-thread safety (must be called before ROOT objects are created).
+    ROOT::EnableThreadSafety();
+    TClass::GetClass("TTree");
+    TClass::GetClass("TFile");
+    TClass::GetClass("TBranch");
+    TClass::GetClass("TH1F");
 
     std::string output;
-    std::vector<std::string> input_3p5, input_0p7;
+    std::vector<std::string> input_3p5, input_2p2, input_0p7;
     std::string pngDir = "module_hists";
 
     int max_events = -1;
+    bool use_GEM = false;
     {
         std::vector<std::string> *cur = nullptr;
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "-a")       { cur = &input_3p5; }
-            else if (arg == "-b")  { cur = &input_0p7; }
+            else if (arg == "-b")  { cur = &input_2p2; }
+            else if (arg == "-c")  { cur = &input_0p7; }
+            else if (arg == "-g")  { cur = nullptr; use_GEM = true; }
             else if (arg == "-o")  { cur = nullptr; if (++i < argc) output = argv[i]; }
             else if (arg == "-n")  { cur = nullptr; if (++i < argc) max_events = std::atoi(argv[i]); }
             else if (arg == "-p")  { cur = nullptr; if (++i < argc) pngDir = argv[i]; }
@@ -87,6 +105,7 @@ int main(int argc, char *argv[]){
 
     // Energy histogram for each crystal
     std::map<int, TH1F*> energy_hists_3p5;
+    std::map<int, TH1F*> energy_hists_2p2;
     std::map<int, TH1F*> energy_hists_0p7;
     for (int i = 0; i < hycal.module_count(); ++i) {
         const auto &m = hycal.module(i);
@@ -94,46 +113,66 @@ int main(int argc, char *argv[]){
         std::string hname = "h_energy_" + m.name;
         std::string htitle = "Energy " + m.name + ";E (MeV);Counts";
         energy_hists_3p5[m.id] = new TH1F((hname + "_3p5").c_str(), (htitle + " (3.5)").c_str(), 400, 0, 4000);
+        energy_hists_2p2[m.id] = new TH1F((hname + "_2p2").c_str(), (htitle + " (2.2)").c_str(), 400, 0, 4000);
         energy_hists_0p7[m.id] = new TH1F((hname + "_0p7").c_str(), (htitle + " (0.7)").c_str(), 400, 0, 4000);
+        energy_hists_3p5[m.id]->SetDirectory(nullptr);
+        energy_hists_2p2[m.id]->SetDirectory(nullptr);
+        energy_hists_0p7[m.id]->SetDirectory(nullptr);
     }
 
-    // --- setup TChain and branches ---
-    TChain *chain = new TChain("recon");
-    for (const auto &f : input_3p5) {
-        chain->Add(f.c_str());
-        std::cerr << "Added file: " << f << "\n";
-    }
-    TTree *tree = chain;
-    if (!tree) {
-        std::cerr << "Cannot find TTree 'recon' in input files\n";
-        return 1;
-    }
+    long long n_sum_3p5 = 0;
+    long long n_sum_2p2 = 0;
+    long long n_sum_0p7 = 0;
+    std::mutex io_mtx;
 
-    EventVars_Recon ev;
-    prad2::SetReconReadBranches(tree, ev);
+    auto run_energy = [&](const std::string &label,
+                          const std::vector<std::string> &inputs,
+                          std::map<int, TH1F*> &energy_hists,
+                          float Ebeam,
+                          long long &n_sum) {
+        TChain chain("recon");
+        for (const auto &f : inputs) {
+            chain.Add(f.c_str());
+            std::lock_guard<std::mutex> lk(io_mtx);
+            std::cerr << "[" << label << "] Added file: " << f << "\n";
+        }
 
-    long long n_sum_3p5 = process_event(tree, ev, hycal, energy_hists_3p5, physics, 3485.f, max_events);
+        EventVars_Recon ev;
+        prad2::SetReconReadBranches(&chain, ev);
+        PhysicsTools local_physics(hycal);
 
-    // --- repeat for 0.7 GeV data ---
-    TChain *chain2 = new TChain("recon");
-    for (const auto &f : input_0p7) {
-        chain2->Add(f.c_str());
-        std::cerr << "Added file: " << f << "\n";
-    }
-    TTree *tree2 = chain2;
-    if (!tree2) {
-        std::cerr << "Cannot find TTree 'recon' in input files\n";
-        return 1;
-    }
+        {
+            std::lock_guard<std::mutex> lk(io_mtx);
+            std::cerr << "[" << label << "] Processing "
+                      << chain.GetEntries() << " event(s)\n";
+        }
+        n_sum = process_event(use_GEM, &chain, ev, hycal, energy_hists, local_physics,
+                              Ebeam, max_events, label, &io_mtx);
+        {
+            std::lock_guard<std::mutex> lk(io_mtx);
+            std::cerr << "[" << label << "] Selected " << n_sum
+                      << " sum-trigger event(s)\n";
+        }
+    };
 
-    EventVars_Recon ev2;
-    prad2::SetReconReadBranches(tree2, ev2);
-    long long n_sum_0p7 = process_event(tree2, ev2, hycal, energy_hists_0p7, physics, 729.f, max_events);
+    std::vector<std::thread> threads;
+    threads.reserve(3);
+    threads.emplace_back([&]() {
+        run_energy("3.5 GeV", input_3p5, energy_hists_3p5, E3p5, n_sum_3p5);
+    });
+    threads.emplace_back([&]() {
+        run_energy("2.2 GeV", input_2p2, energy_hists_2p2, E2p2, n_sum_2p2);
+    });
+    threads.emplace_back([&]() {
+        run_energy("0.7 GeV", input_0p7, energy_hists_0p7, E0p7, n_sum_0p7);
+    });
+    for (auto &t : threads) t.join();
 
     // a file with no sum-trigger events would silently produce an all-default
     // calibration (every module skipped); refuse to write output in that case
-    if (n_sum_3p5 <= 0 || n_sum_0p7 <= 0) {
+    if (n_sum_3p5 <= 0 || n_sum_2p2 <= 0 || n_sum_0p7 <= 0) {
         std::cerr << "No sum-trigger events selected (3.5 GeV: " << n_sum_3p5
+                  << ", 2.2 GeV: " << n_sum_2p2
                   << ", 0.7 GeV: " << n_sum_0p7
                   << "); check trigger_bits in the inputs. Aborting before writing calibration.\n";
         return 1;
@@ -150,6 +189,7 @@ int main(int argc, char *argv[]){
     gSystem->mkdir(pngDir.c_str(), true);
     TFile outFile(output.empty() ? "nonlinearity_results.root" : output.c_str(), "RECREATE");
     TDirectory *dir_3p5 = outFile.mkdir("energy_3p5GeV");
+    TDirectory *dir_2p2 = outFile.mkdir("energy_2p2GeV");
     TDirectory *dir_0p7 = outFile.mkdir("energy_0p7GeV");
     TDirectory *dir_lin = outFile.mkdir("linearity");
     for (int i = 0; i < hycal.module_count(); i++) {
@@ -160,19 +200,26 @@ int main(int argc, char *argv[]){
         auto it_3p5 = energy_hists_3p5.find(mod_id);
         if (it_3p5 == energy_hists_3p5.end() || !it_3p5->second) continue;
         auto hist_3p5 = it_3p5->second;
+        auto it_2p2 = energy_hists_2p2.find(mod_id);
+        if (it_2p2 == energy_hists_2p2.end() || !it_2p2->second) continue;
+        auto hist_2p2 = it_2p2->second;
         auto it_0p7 = energy_hists_0p7.find(mod_id);
         if (it_0p7 == energy_hists_0p7.end() || !it_0p7->second) continue;
         auto hist_0p7 = it_0p7->second;
 
-        float x = mod.x, y = mod.y, z = 6270.f;
+        float x = mod.x, y = mod.y, z = 6275.f;
         float theta = std::atan2(std::sqrt(x*x + y*y), z) * 180.f / M_PI;
-        float e_p_exp_3p5 = physics.ExpectedEnergy(theta, 3485.f, "ep");
-        float e_e_exp_3p5 = physics.ExpectedEnergy(theta, 3485.f, "ee");
-        float e_p_exp_0p7 = physics.ExpectedEnergy(theta, 729.f, "ep");
-        float e_e_exp_0p7 = physics.ExpectedEnergy(theta, 729.f, "ee");
+        float e_p_exp_3p5 = physics.ExpectedEnergy(theta, E3p5, "ep");
+        float e_e_exp_3p5 = physics.ExpectedEnergy(theta, E3p5, "ee");
+        float e_p_exp_2p2 = physics.ExpectedEnergy(theta, E2p2, "ep");
+        float e_e_exp_2p2 = physics.ExpectedEnergy(theta, E2p2, "ee");
+        float e_p_exp_0p7 = physics.ExpectedEnergy(theta, E0p7, "ep");
+        float e_e_exp_0p7 = physics.ExpectedEnergy(theta, E0p7, "ee");
 
         float sigma_ep_3p5 = resolution * e_p_exp_3p5 / sqrt(e_p_exp_3p5/1000.f);
         float sigma_ee_3p5 = resolution * e_e_exp_3p5 / sqrt(e_e_exp_3p5/1000.f);
+        float sigma_ep_2p2 = resolution * e_p_exp_2p2 / sqrt(e_p_exp_2p2/1000.f);
+        float sigma_ee_2p2 = resolution * e_e_exp_2p2 / sqrt(e_e_exp_2p2/1000.f);
         float sigma_ep_0p7 = resolution * e_p_exp_0p7 / sqrt(e_p_exp_0p7/1000.f);
         float sigma_ee_0p7 = resolution * e_e_exp_0p7 / sqrt(e_e_exp_0p7/1000.f);
 
@@ -224,10 +271,10 @@ int main(int argc, char *argv[]){
             return static_cast<float>(mean);
         };
 
-        // --- Draw both beam-energy histograms on a two-pad canvas, save PNG ---
+        // --- Draw all beam-energy histograms on a three-pad canvas, save PNG ---
         TCanvas *ch = new TCanvas(Form("ch_mod_W%d", mod_id-1000),
-            Form("Module W%d Histograms", mod_id-1000), 800, 800);
-        ch->Divide(1, 2, 0, 0);
+            Form("Module W%d Histograms", mod_id-1000), 800, 1200);
+        ch->Divide(1, 3, 0, 0);
 
         // --- top pad: 3.5 GeV ---
         ch->cd(1);
@@ -256,8 +303,35 @@ int main(int argc, char *argv[]){
             lat.DrawLatex(0.15, 0.86, "E_{beam} = 3.5 GeV");
         }
 
-        // --- bottom pad: 0.7 GeV ---
+        // --- middle pad: 2.2 GeV ---
         ch->cd(2);
+        gPad->SetBottomMargin(0.005);
+        gPad->SetTopMargin(0.005);
+        gPad->SetLeftMargin(0.12);
+        hist_2p2->GetXaxis()->SetLabelSize(0);
+        hist_2p2->GetXaxis()->SetTitleSize(0);
+        hist_2p2->SetTitle(";  ;Counts");
+        hist_2p2->SetLineColor(kBlack);
+        hist_2p2->SetLineWidth(2);
+        hist_2p2->SetStats(0);
+        hist_2p2->Draw("HIST");
+        float peak_ep_2p2 = fitPeakAndDraw(hist_2p2, e_p_exp_2p2, sigma_ep_2p2, kRed);
+        float peak_ee_2p2 = fitPeakAndDraw(hist_2p2, e_e_exp_2p2, sigma_ee_2p2, kBlue);
+        {
+            TLatex lat;
+            lat.SetNDC(); lat.SetTextSize(0.050);
+            lat.SetTextColor(kRed);
+            lat.DrawLatex(0.50, 0.86, Form("e-p: exp=%.0f  meas=%s",
+                (double)e_p_exp_2p2, peak_ep_2p2 > 0.f ? Form("%.0f MeV", (double)peak_ep_2p2) : "N/A"));
+            lat.SetTextColor(kBlue);
+            lat.DrawLatex(0.50, 0.78, Form("e-e: exp=%.0f  meas=%s",
+                (double)e_e_exp_2p2, peak_ee_2p2 > 0.f ? Form("%.0f MeV", (double)peak_ee_2p2) : "N/A"));
+            lat.SetTextColor(kBlack);
+            lat.DrawLatex(0.15, 0.86, "E_{beam} = 2.2 GeV");
+        }
+
+        // --- bottom pad: 0.7 GeV ---
+        ch->cd(3);
         gPad->SetTopMargin(0.005);
         gPad->SetBottomMargin(0.14);
         gPad->SetLeftMargin(0.12);
@@ -303,10 +377,14 @@ int main(int argc, char *argv[]){
         float scale = e_p_exp_3p5 / peak_ep_3p5;
         //peak_ep_3p5 *= scale;
         //peak_ee_3p5 *= scale;
+        //peak_ep_2p2 *= scale;
+        //peak_ee_2p2 *= scale;
         //peak_ep_0p7 *= scale;
         //peak_ee_0p7 *= scale;
         addPoint(e_p_exp_3p5, peak_ep_3p5);
         addPoint(e_e_exp_3p5, peak_ee_3p5);
+        addPoint(e_p_exp_2p2, peak_ep_2p2);
+        addPoint(e_e_exp_2p2, peak_ee_2p2);
         addPoint(e_p_exp_0p7, peak_ep_0p7);
         addPoint(e_e_exp_0p7, peak_ee_0p7);
         g->SetMarkerStyle(20);
@@ -392,6 +470,8 @@ int main(int argc, char *argv[]){
             };
             addCorrPoint(e_p_exp_3p5, peak_ep_3p5);
             addCorrPoint(e_e_exp_3p5, peak_ee_3p5);
+            addCorrPoint(e_p_exp_2p2, peak_ep_2p2);
+            addCorrPoint(e_e_exp_2p2, peak_ee_2p2);
             addCorrPoint(e_p_exp_0p7, peak_ep_0p7);
             addCorrPoint(e_e_exp_0p7, peak_ee_0p7);
         }
@@ -414,6 +494,8 @@ int main(int argc, char *argv[]){
             };
             addCorrPoint2(e_p_exp_3p5, peak_ep_3p5);
             addCorrPoint2(e_e_exp_3p5, peak_ee_3p5);
+            addCorrPoint2(e_p_exp_2p2, peak_ep_2p2);
+            addCorrPoint2(e_e_exp_2p2, peak_ee_2p2);
             addCorrPoint2(e_p_exp_0p7, peak_ep_0p7);
             addCorrPoint2(e_e_exp_0p7, peak_ee_0p7);
         }
@@ -452,6 +534,8 @@ int main(int argc, char *argv[]){
     }
     dir_3p5->cd();
     for (auto &[id, h] : energy_hists_3p5) if (h) h->Write();
+    dir_2p2->cd();
+    for (auto &[id, h] : energy_hists_2p2) if (h) h->Write();
     dir_0p7->cd();
     for (auto &[id, h] : energy_hists_0p7) if (h) h->Write();
     outFile.cd();
@@ -463,19 +547,33 @@ int main(int argc, char *argv[]){
 
 }
 
-long long process_event( TTree *tree, const EventVars_Recon &ev, const fdec::HyCalSystem &hycal,
-    std::map<int, TH1F*> &energy_hists, PhysicsTools &physics, float Ebeam, int max_events)
+long long process_event(bool use_GEM, TTree *tree, const EventVars_Recon &ev, const fdec::HyCalSystem &hycal,
+    std::map<int, TH1F*> &energy_hists, PhysicsTools &physics, float Ebeam, int max_events,
+    const std::string &label, std::mutex *io_mtx)
 {
+    auto log_msg = [&](const std::string &msg, bool flush = false) {
+        if (io_mtx) {
+            std::lock_guard<std::mutex> lk(*io_mtx);
+            std::cerr << msg;
+            if (flush) std::cerr << std::flush;
+        } else {
+            std::cerr << msg;
+            if (flush) std::cerr << std::flush;
+        }
+    };
+
     long long n_accepted = 0;
     for (int i = 0; i < tree->GetEntries(); i++) {
         // entry-count cap; checked before the trigger cut so -n N stops at entry N
         if (max_events > 0 && i >= max_events) {
-            std::cerr << "Reached max events limit: " << max_events << "\n";
+            log_msg("[" + label + "] Reached max events limit: "
+                    + std::to_string(max_events) + "\n");
             break;
         }
         tree->GetEntry(i);
         if( i % 1000 == 0) {
-            std::cerr << "Processing event " << i << "/" << tree->GetEntries() << "\r" << std::flush;
+            log_msg("[" + label + "] Processing event " + std::to_string(i)
+                    + "/" + std::to_string(tree->GetEntries()) + "\r", true);
         }
         if ((ev.trigger_bits & prad2::TBIT_sum) == 0) continue;
         n_accepted++;
@@ -486,13 +584,45 @@ long long process_event( TTree *tree, const EventVars_Recon &ev, const fdec::HyC
             auto mod = hycal.module_by_id(mod_id);
             if ( !mod || !mod->is_pwo4()) continue; // only look at PbWO4 crystals
 
-            // require hit to be in central 3x3 of a 5x5 grid (|xd|,|yd| < 0.3)
-            float xd = (ev.cl_x[j] - (float)mod->x) / (float)mod->size_x;
-            float yd = (ev.cl_y[j] - (float)mod->y) / (float)mod->size_y;
-            //if (std::abs(xd) >= 0.25f || std::abs(yd) >= 0.25f) continue;
+            float mod_x = (float)mod->x;
+            float mod_y = (float)mod->y;
+            float mod_size_x = (float)mod->size_x;
+            float mod_size_y = (float)mod->size_y;
 
-            float x = ev.cl_x[j], y = ev.cl_y[j], z = ev.cl_z[j];
-            float theta = std::atan2(std::sqrt(x*x + y*y), z) * 180.f / M_PI;
+            float c_x, c_y, c_z;
+            if(!use_GEM){
+                c_x = ev.cl_x[j];
+                c_y = ev.cl_y[j];
+                c_z = ev.cl_z[j];
+            }
+            else{
+                bool match[4] = {false, false, false, false};
+                for(int d = 0; d < 4; d++){
+                    if(ev.matchFlag[j] & 1 << d) match[d] = true;
+                }
+                if( (match[0] || match[1]) && (match[2] || match[3]) ){
+                    if(match[0]) { c_x = ev.matchGEMx[j][0]; c_y = ev.matchGEMy[j][0]; c_z = ev.matchGEMz[j][0]; }
+                    else { c_x = ev.matchGEMx[j][1]; c_y = ev.matchGEMy[j][1]; c_z = ev.matchGEMz[j][1]; }
+                    //projection onto the HyCal module plane
+                    float scale = 6275.f / c_z;
+                    c_x *= scale;
+                    c_y *= scale;
+                    c_z = 6275.f; // project onto the HyCal module plane
+                }
+                else{
+                    c_x = -999.f;
+                    c_y = -999.f;
+                    c_z = -999.f;
+                }
+                
+            }
+
+            // require hit to be in central 3x3 of a 5x5 grid (|xd|,|yd| < 0.3)
+            float xd = (c_x - mod_x) / mod_size_x;
+            float yd = (c_y - mod_y) / mod_size_y;
+            if (std::abs(xd) >= 0.2f || std::abs(yd) >= 0.2f) continue;
+
+            float theta = std::atan2(std::sqrt(c_x*c_x + c_y*c_y), 6275.f) * 180.f / M_PI;
             float energy = ev.cl_energy[j];
 
             bool veto = false;

@@ -488,10 +488,16 @@ double HyCalSystem::GetCalibBaseEnergy(int primex_id) const
     return m ? m->cal_base_energy : 0.;
 }
 
-double HyCalSystem::GetCalibNonLinearity(int primex_id) const
+double HyCalSystem::GetCalibNonLinearity1(int primex_id) const
 {
     const Module *m = module_by_id(primex_id);
-    return m ? m->cal_non_linear : 0.;
+    return m ? m->cal_non_linear_1 : 0.;
+}
+
+double HyCalSystem::GetCalibNonLinearity2(int primex_id) const
+{
+    const Module *m = module_by_id(primex_id);
+    return m ? m->cal_non_linear_2 : 0.;
 }
 
 void HyCalSystem::SetCalibConstant(int primex_id, double factor)
@@ -511,8 +517,19 @@ void HyCalSystem::SetCalibBaseEnergy(int primex_id, double energy)
 void HyCalSystem::SetCalibNonLinearity(int primex_id, double nl)
 {
     auto it = id_map_.find(primex_id);
-    if (it != id_map_.end())
-        modules_[it->second].cal_non_linear = nl;
+    if (it != id_map_.end()) {
+        modules_[it->second].cal_non_linear_1 = nl;
+        modules_[it->second].cal_non_linear_2 = 0.;
+    }
+}
+
+void HyCalSystem::SetCalibNonLinearity(int primex_id, double nl1, double nl2)
+{
+    auto it = id_map_.find(primex_id);
+    if (it != id_map_.end()) {
+        modules_[it->second].cal_non_linear_1 = nl1;
+        modules_[it->second].cal_non_linear_2 = nl2;
+    }
 }
 
 void HyCalSystem::PrintCalibConstants(const std::string &output_file) const
@@ -530,7 +547,8 @@ void HyCalSystem::PrintCalibConstants(const std::string &output_file) const
             {"name",        m.name},
             {"factor",      m.cal_factor},
             {"base_energy", m.cal_base_energy},
-            {"non_linear",  m.cal_non_linear}
+            {"nl1",         m.cal_non_linear_1},
+            {"nl2",         m.cal_non_linear_2}
         });
     }
     f << j.dump(2) << "\n";
@@ -562,7 +580,8 @@ int HyCalSystem::LoadCalibration(const std::string &calib_path)
         Module &mod = modules_[m->index];
         mod.cal_factor      = entry.value("factor", 0.0);
         mod.cal_base_energy = entry.value("base_energy", 0.0);
-        mod.cal_non_linear  = entry.value("non_linear", 0.0);
+        mod.cal_non_linear_1 = entry.value("nl1", 0.0);
+        mod.cal_non_linear_2 = entry.value("nl2", 0.0);
         ++matched;
     }
 

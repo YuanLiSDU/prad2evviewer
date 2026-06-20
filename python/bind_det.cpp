@@ -542,7 +542,8 @@ static void bind_hycal(py::module_ &m)
         .def_readonly("daq",    &fdec::Module::daq)
         .def_readonly("cal_factor",      &fdec::Module::cal_factor)
         .def_readonly("cal_base_energy", &fdec::Module::cal_base_energy)
-        .def_readonly("cal_non_linear",  &fdec::Module::cal_non_linear)
+        .def_readonly("cal_non_linear_1",  &fdec::Module::cal_non_linear_1)
+        .def_readonly("cal_non_linear_2",  &fdec::Module::cal_non_linear_2)
         .def("energize", &fdec::Module::energize, py::arg("adc"),
              "Convert a pedestal-subtracted ADC value to MeV, including the "
              "non-linear correction term.")

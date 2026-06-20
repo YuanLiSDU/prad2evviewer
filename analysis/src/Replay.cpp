@@ -189,6 +189,7 @@ void Replay::clearReconEvent(EventVars_Recon &ev)
     ev.rf_n_b = 0;
     std::fill(std::begin(ev.rf_ns_a), std::end(ev.rf_ns_a), 0.f);
     std::fill(std::begin(ev.rf_ns_b), std::end(ev.rf_ns_b), 0.f);
+    std::fill(std::begin(ev.cl_linear_corr), std::end(ev.cl_linear_corr), 1.f);
     std::fill(std::begin(ev.cl_dt_rf), std::end(ev.cl_dt_rf),
               std::numeric_limits<float>::quiet_NaN());
 }
@@ -1017,6 +1018,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
                 ev->cl_y[i] = local_hit.y;
                 ev->cl_z[i] = local_hit.z;
                 ev->cl_energy[i] = local_hit.energy;
+                ev->cl_linear_corr[i] = hits[i].linear_corr;
                 ev->cl_center[i] = local_hit.center_id;
                 ev->cl_flag[i] = local_hit.flag;
 
