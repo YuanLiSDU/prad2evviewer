@@ -84,18 +84,11 @@ inline std::string FindRefGainFile(const std::string &dir, int run_num)
     return {};
 }
 
-// Load reference gain factors for the given run number.
+// Load reference gain factors from one explicit .dat file.
 // On any failure returns a default-constructed (unloaded) table.
-inline RefGainTable LoadRefGain(const std::string &dir, int run_num)
+inline RefGainTable LoadRefGainFile(const std::string &path)
 {
     RefGainTable tbl;
-
-    std::string path = FindRefGainFile(dir, run_num);
-    if (path.empty()) {
-        std::cerr << "Warning: no gain factor file found in " << dir
-                  << " for run " << run_num << "\n";
-        return tbl;
-    }
 
     std::ifstream f(path);
     if (!f) {
@@ -142,6 +135,19 @@ inline RefGainTable LoadRefGain(const std::string &dir, int run_num)
     std::cerr << "RefGain: loaded run " << tbl.run_number
               << " from " << path << "\n";
     return tbl;
+}
+
+// Load reference gain factors for the given run number.
+// On any failure returns a default-constructed (unloaded) table.
+inline RefGainTable LoadRefGain(const std::string &dir, int run_num)
+{
+    std::string path = FindRefGainFile(dir, run_num);
+    if (path.empty()) {
+        std::cerr << "Warning: no gain factor file found in " << dir
+                  << " for run " << run_num << "\n";
+        return RefGainTable{};
+    }
+    return LoadRefGainFile(path);
 }
 
 // Per-module gain correction factor: correction[id] = g_ref / g_current.
@@ -437,4 +443,3 @@ inline FitResult gain_hist_fitter(TH1F* h, const float & fac)
 }
 
 } // namespace prad2
-

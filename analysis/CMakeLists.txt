@@ -18,6 +18,7 @@ include(GNUInstallDirs)
 # ---------------------------------------------------------------------------
 add_library(prad2ana STATIC
     src/Replay.cpp
+    src/GainCorrCompute.cpp
     src/PhysicsTools.cpp
     src/MatchingTools.cpp)
 
@@ -51,6 +52,7 @@ endfunction()
 
 add_analysis_tool(replay_rawdata tools/replay_rawdata.cpp)
 add_analysis_tool(replay_gainCorr tools/replay_gainCorr.cpp)
+add_analysis_tool(online_gain_monitor_base tools/online_gain_monitor_base.cpp)
 add_analysis_tool(replay_recon tools/replay_recon.cpp)
 add_analysis_tool(replay_filter tools/replay_filter.cpp)
 add_analysis_tool(replay_add_hv tools/replay_add_hv.cpp)
@@ -69,7 +71,7 @@ add_analysis_tool(hycal_rf_offset_calib tools/hycal_rf_offset_calib.cpp)
 add_analysis_tool(nonlinearity tools/nonlinearity.cpp)
 add_analysis_tool(calib_5by5 tools/calib_5by5.cpp)
 
-install(TARGETS replay_rawdata replay_gainCorr replay_recon replay_filter replay_add_hv
+install(TARGETS replay_rawdata replay_gainCorr online_gain_monitor_base replay_recon replay_filter replay_add_hv
                 live_charge epCalib
                 cosmic_test quick_check matching det_calib cosmic_lg sim2replay
                 gain_monitor gain_fitter refGain_produce

@@ -258,6 +258,7 @@ if(BUILD_PYTHON)
         "hycal_scaler_map:scripts/hycal_scaler_map.py"
         "hycal_pedestal_monitor:scripts/hycal_pedestal_monitor.py"
         "hycal_gain_monitor:scripts/hycal_gain_monitor.py"
+        "online_gain_monitor:scripts/online_gain_monitor.py"
         "hycal_map_builder:scripts/hycal_map_builder.py"
         "hycal_event_viewer:scripts/hycal_event_viewer.py"
         "gem_hycal_match_viewer:scripts/gem_hycal_match_viewer.py"

@@ -1299,8 +1299,8 @@ bool Replay::Process_LMSgainFactor(const std::string &input_evio, const std::str
             if(is_lms || is_alpha) tree->Fill();
 
             total++;
-            if (total % 1000 == 0)
-                std::cerr << "\rReplay: " << total << " events processed" << std::flush;
+            //if (total % 1000 == 0)
+                //std::cerr << "\rReplay: " << total << " events processed" << std::flush;
         }
     }
 
