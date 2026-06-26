@@ -1,14 +1,20 @@
 #!/bin/bash
-# replay_recon.sh — replay and reconstruct a single run from CLAS12 cache
-# This script is designed to used at JLab ifarm
-# Not support to submit batch jobs system yet, will do it later
+# replay_recon.sh — run the single-run PRad-II replay pipeline on JLab ifarm
 #
 # Usage: chmod +x scripts/shell/replay_recon.sh 
 #       ./replay_recon.sh
 #   Prompts for run number, then:
 #     1. Counts EVIO files in /cache/clas12/rg-o/data/prad_<RUN>/
-#     2. Runs prad2ana_replay_recon
-#     3. Merges output ROOT files with hadd
+#     2. Runs prad2ana_replay_recon; by default, recon ROOTs are merged in
+#        groups of 62 into prad_<RUN>_recon_<NNN>.root
+#     3. Runs prad2ana_replay_filter on all recon ROOTs and writes the
+#        corresponding *_filter.root files directly under the run output dir
+#     4. Runs prad2ana_live_charge over all filtered ROOTs together
+#     5. Runs prad2ana_quick_check over all recon ROOTs
+#
+# The one "parallel jobs" prompt is reused for replay_recon -j,
+# replay_filter -t, and quick_check -j. All products are written under
+# <output_base>/prad_<RUN>/; no filter subdirectory is created.
 
 # ---------------------------------------------------------------------------
 # Configurable defaults (override via environment variables)
@@ -19,9 +25,10 @@ CACHE_BASE="${CACHE_BASE:-/cache/clas12/rg-o/data}"
 
 # Default output base directory (can be overridden by user input)
 OUTPUT_BASE="${OUTPUT_BASE:-./}"
-REPLAY_CORES="${REPLAY_CORES:-50}"
+REPLAY_CORES="${REPLAY_CORES:-15}"
 REPLAY_ZERO_SUPPRESS="${REPLAY_ZERO_SUPPRESS:-5}"
 REPLAY_MAX_FILES="${REPLAY_MAX_FILES:-10000}"
+REPLAY_MERGE_FILES="${REPLAY_MERGE_FILES:-62}"
 DEFAULT_CUTS="${DEFAULT_CUTS:-${PRAD2_SOFT}/analysis/cuts/prad2_default.json}"
 
 # ---------------------------------------------------------------------------
@@ -58,6 +65,9 @@ read -rp "Enter GEM zero suppression (-z) [${REPLAY_ZERO_SUPPRESS}]: " _INPUT
 
 read -rp "Enter max number of files to process (-f) [${REPLAY_MAX_FILES}]: " _INPUT
 [[ -n "${_INPUT}" ]] && REPLAY_MAX_FILES="${_INPUT}"
+
+read -rp "Enter replay merge group size (-m, 0 disables) [${REPLAY_MERGE_FILES}]: " _INPUT
+[[ -n "${_INPUT}" ]] && REPLAY_MERGE_FILES="${_INPUT}"
 
 echo "Enter cut JSON file for replay_filter (path to cuts.json, or 'default' to use ${DEFAULT_CUTS}):"
 read -rp "Cut JSON [default]: " _INPUT
@@ -124,10 +134,10 @@ if [[ ! -x "${REPLAY_CMD}" ]]; then
 fi
 
 echo "Starting replay..."
-echo "Command: ${REPLAY_CMD} ${RUN_DIR} -o ${OUT_DIR} -j ${REPLAY_CORES} -z ${REPLAY_ZERO_SUPPRESS} -f ${REPLAY_MAX_FILES}"
+echo "Command: ${REPLAY_CMD} ${RUN_DIR} -o ${OUT_DIR} -j ${REPLAY_CORES} -z ${REPLAY_ZERO_SUPPRESS} -f ${REPLAY_MAX_FILES} -m ${REPLAY_MERGE_FILES}"
 echo ""
 
-"${REPLAY_CMD}" "${RUN_DIR}" -o "${OUT_DIR}" -j "${REPLAY_CORES}" -z "${REPLAY_ZERO_SUPPRESS}" -f "${REPLAY_MAX_FILES}"
+"${REPLAY_CMD}" "${RUN_DIR}" -o "${OUT_DIR}" -j "${REPLAY_CORES}" -z "${REPLAY_ZERO_SUPPRESS}" -f "${REPLAY_MAX_FILES}" -m "${REPLAY_MERGE_FILES}"
 REPLAY_EXIT=$?
 
 if [[ "${REPLAY_EXIT}" -ne 0 ]]; then
@@ -140,68 +150,20 @@ echo ""
 echo "Replay finished successfully."
 
 # ---------------------------------------------------------------------------
-# 5. Merge output ROOT files with hadd
-#    Expected filename pattern: prad_024650.00**_recon.root
+# 5. Select reconstructed ROOT files for downstream tools
 # ---------------------------------------------------------------------------
-MERGED="${OUT_DIR}/prad_${RUN_NUMBER}_recon.root"
-mapfile -t ROOT_FILES < <(ls "${OUT_DIR}/prad_${RUN_NUMBER}."*"_recon.root" 2>/dev/null | sort)
-
-if [[ ${#ROOT_FILES[@]} -eq 0 ]]; then
-    echo "ERROR: no files matching prad_${RUN_NUMBER}.00**_recon.root found in ${OUT_DIR}."
+mapfile -t RECON_INPUTS < <(find "${OUT_DIR}" -maxdepth 1 -type f -name "prad_${RUN_NUMBER}_recon_*.root" | sort)
+if [[ "${#RECON_INPUTS[@]}" -eq 0 ]]; then
+    mapfile -t RECON_INPUTS < <(find "${OUT_DIR}" -maxdepth 1 -type f -name "prad_${RUN_NUMBER}.*_recon.root" | sort)
+fi
+if [[ "${#RECON_INPUTS[@]}" -eq 0 ]]; then
+    echo "ERROR: no reconstructed ROOT files found in ${OUT_DIR}."
     exit 1
 fi
-
-echo "Merging ${#ROOT_FILES[@]} ROOT file(s) into: ${MERGED}"
-echo "Command: hadd -f ${MERGED} ${OUT_DIR}/prad_${RUN_NUMBER}.00**_recon.root"
-echo ""
-
-hadd -f "${MERGED}" "${ROOT_FILES[@]}"
-HADD_EXIT=$?
-
-if [[ "${HADD_EXIT}" -ne 0 ]]; then
-    echo ""
-    echo "ERROR: hadd exited with code ${HADD_EXIT}."
-    exit "${HADD_EXIT}"
-fi
-
-echo ""
-echo "Done. Merged file: ${MERGED}"
+echo "Downstream input ROOT file(s): ${#RECON_INPUTS[@]}"
 
 # ---------------------------------------------------------------------------
-# 6. Remove individual sub-files after successful merge
-# ---------------------------------------------------------------------------
-echo "Removing ${#ROOT_FILES[@]} sub-file(s)..."
-rm -f "${ROOT_FILES[@]}"
-echo "Done."
-
-# ---------------------------------------------------------------------------
-# 7. Run quick check on the merged file
-# ---------------------------------------------------------------------------
-QUICK_CHECK_CMD="${PRAD2_BIN}/prad2ana_quick_check"
-
-if [[ ! -x "${QUICK_CHECK_CMD}" ]]; then
-    echo "WARNING: executable not found: ${QUICK_CHECK_CMD}, skipping quick check."
-else
-    echo ""
-    echo "Running quick check..."
-    echo "Command: ${QUICK_CHECK_CMD} ${MERGED}"
-    echo ""
-
-    "${QUICK_CHECK_CMD}" "${MERGED}"
-    QC_EXIT=$?
-
-    if [[ "${QC_EXIT}" -ne 0 ]]; then
-        echo ""
-        echo "ERROR: quick check exited with code ${QC_EXIT}."
-        exit "${QC_EXIT}"
-    fi
-
-    echo ""
-    echo "Quick check finished."
-fi
-
-# ---------------------------------------------------------------------------
-# 8. Run replay filter
+# 6. Run replay filter
 # ---------------------------------------------------------------------------
 FILTER_CMD="${PRAD2_BIN}/prad2ana_replay_filter"
 
@@ -211,14 +173,20 @@ else
     if [[ ! -f "${CUT_JSON}" ]]; then
         echo "WARNING: cut JSON not found: ${CUT_JSON}, skipping replay filter."
     else
-        FILTERED="${OUT_DIR}/prad_${RUN_NUMBER}_filtered.root"
         REPORT="${OUT_DIR}/prad_${RUN_NUMBER}_filter_report.json"
+        SLOW_ROOT="${OUT_DIR}/prad_${RUN_NUMBER}_epics.root"
         echo ""
         echo "Running replay filter..."
-        echo "Command: ${FILTER_CMD} ${MERGED} -o ${FILTERED} -c ${CUT_JSON} -j ${REPORT}"
+        if [[ "${#RECON_INPUTS[@]}" -gt 1 ]]; then
+            FILTER_OUT="${OUT_DIR}"
+        else
+            _BASE="$(basename "${RECON_INPUTS[0]}")"
+            FILTER_OUT="${OUT_DIR}/${_BASE%.root}_filter.root"
+        fi
+        echo "Command: ${FILTER_CMD} ${RECON_INPUTS[*]} -o ${FILTER_OUT} -c ${CUT_JSON} -j ${REPORT} -t ${REPLAY_CORES}"
         echo ""
 
-        "${FILTER_CMD}" "${MERGED}" -o "${FILTERED}" -c "${CUT_JSON}" -j "${REPORT}"
+        "${FILTER_CMD}" "${RECON_INPUTS[@]}" -o "${FILTER_OUT}" -c "${CUT_JSON}" -j "${REPORT}" -t "${REPLAY_CORES}"
         FILTER_EXIT=$?
 
         if [[ "${FILTER_EXIT}" -ne 0 ]]; then
@@ -229,27 +197,32 @@ else
 
         echo ""
         echo "Replay filter finished."
-        echo "Filtered file : ${FILTERED}"
+        echo "Filtered out  : ${FILTER_OUT}"
+        echo "Slow ROOT     : ${SLOW_ROOT}"
         echo "Filter report : ${REPORT}"
     fi
 fi
 
 # ---------------------------------------------------------------------------
-# 9. Run live charge calculation on the filtered file
+# 7. Run live charge calculation
 # ---------------------------------------------------------------------------
 LIVE_CHARGE_CMD="${PRAD2_BIN}/prad2ana_live_charge"
 
 if [[ ! -x "${LIVE_CHARGE_CMD}" ]]; then
     echo "WARNING: executable not found: ${LIVE_CHARGE_CMD}, skipping live charge."
 else
-    LC_INPUT="${FILTERED:-${MERGED}}"
+    mapfile -t LC_INPUTS < <(find "${OUT_DIR}" -maxdepth 1 -type f -name "prad_${RUN_NUMBER}*_filter*.root" | sort)
+    if [[ "${#LC_INPUTS[@]}" -eq 0 ]]; then
+        echo "ERROR: no filtered ROOT files found in ${OUT_DIR}; live_charge requires prad_${RUN_NUMBER}*_filter*.root inputs."
+        exit 1
+    fi
     LC_JSON="${OUT_DIR}/prad_${RUN_NUMBER}_live_charge.json"
     echo ""
     echo "Running live charge calculation..."
-    echo "Command: ${LIVE_CHARGE_CMD} ${LC_INPUT} -j ${LC_JSON}"
+    echo "Command: ${LIVE_CHARGE_CMD} ${LC_INPUTS[*]} -j ${LC_JSON}"
     echo ""
 
-    "${LIVE_CHARGE_CMD}" "${LC_INPUT}" -j "${LC_JSON}"
+    "${LIVE_CHARGE_CMD}" "${LC_INPUTS[@]}" -j "${LC_JSON}"
     LC_EXIT=$?
 
     if [[ "${LC_EXIT}" -ne 0 ]]; then
@@ -263,4 +236,29 @@ else
     echo "Live charge JSON: ${LC_JSON}"
 fi
 
+# ---------------------------------------------------------------------------
+# 8. Run quick check
+# ---------------------------------------------------------------------------
+QUICK_CHECK_CMD="${PRAD2_BIN}/prad2ana_quick_check"
 
+if [[ ! -x "${QUICK_CHECK_CMD}" ]]; then
+    echo "WARNING: executable not found: ${QUICK_CHECK_CMD}, skipping quick check."
+else
+    echo ""
+    echo "Running quick check..."
+    QC_OUTPUT="${OUT_DIR}/prad_${RUN_NUMBER}_quick_check.root"
+    echo "Command: ${QUICK_CHECK_CMD} ${RECON_INPUTS[*]} -o ${QC_OUTPUT} -j ${REPLAY_CORES}"
+    echo ""
+
+    "${QUICK_CHECK_CMD}" "${RECON_INPUTS[@]}" -o "${QC_OUTPUT}" -j "${REPLAY_CORES}"
+    QC_EXIT=$?
+
+    if [[ "${QC_EXIT}" -ne 0 ]]; then
+        echo ""
+        echo "ERROR: quick check exited with code ${QC_EXIT}."
+        exit "${QC_EXIT}"
+    fi
+
+    echo ""
+    echo "Quick check finished."
+fi

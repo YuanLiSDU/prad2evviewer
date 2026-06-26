@@ -71,21 +71,27 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <getopt.h>
+#include <TROOT.h>
 
 using json = nlohmann::json;
 
@@ -635,11 +641,55 @@ bool detect_event_tree(const std::string &path, std::string &name)
     return false;
 }
 
+Long64_t tree_entries(const std::string &path, const char *tree_name)
+{
+    std::unique_ptr<TFile> f(TFile::Open(path.c_str(), "READ"));
+    if (!f || f->IsZombie()) return 0;
+    TTree *t = dynamic_cast<TTree *>(f->Get(tree_name));
+    return t ? t->GetEntries() : 0;
+}
+
+std::string insert_before_root(const std::string &path, const std::string &suffix)
+{
+    auto p = std::filesystem::path(path);
+    std::string name = p.filename().string();
+    const std::string ext = ".root";
+    if (name.size() >= ext.size() &&
+        name.compare(name.size() - ext.size(), ext.size(), ext) == 0)
+        name.insert(name.size() - ext.size(), suffix);
+    else
+        name += suffix;
+    return name;
+}
+
+std::string filtered_output_path(const std::string &out_dir,
+                                 const std::string &input_path,
+                                 const std::string &label = "")
+{
+    std::string suffix = "_filter" + (label.empty() ? std::string() : "_" + label);
+    return (std::filesystem::path(out_dir) / insert_before_root(input_path, suffix)).string();
+}
+
+std::string run_epics_path(const std::string &out_dir, int run_number)
+{
+    char name[64];
+    std::snprintf(name, sizeof(name), "prad_%06d_epics.root", run_number);
+    return (std::filesystem::path(out_dir) / name).string();
+}
+
+std::string run_report_path(const std::string &out_dir, int run_number)
+{
+    char name[80];
+    std::snprintf(name, sizeof(name), "prad_%06d_filter_report.json", run_number);
+    return (std::filesystem::path(out_dir) / name).string();
+}
+
 int run(const std::vector<std::string> &input_files,
         const std::string &output_path,
         const std::string &cuts_path,
         const std::string &report_path,
-        int run_number_override)
+        int run_number_override,
+        int num_threads)
 {
     CutConfig cuts;
     if (!load_cuts(cuts_path, cuts)) return 1;
@@ -657,6 +707,28 @@ int run(const std::vector<std::string> &input_files,
     if (run_number < 0) run_number = analysis::get_run_int(input_files.front());
     if (run_number < 0 && !scalers.empty())    run_number = (int)scalers.front().run_number;
     if (run_number < 0 && !epics_rows.empty()) run_number = (int)epics_rows.front().run_number;
+
+    struct FileInfo {
+        std::string path;
+        size_t scaler_offset = 0;
+        size_t epics_offset = 0;
+        Long64_t scaler_entries = 0;
+        Long64_t epics_entries = 0;
+    };
+    std::vector<FileInfo> file_info;
+    file_info.reserve(input_files.size());
+    size_t scaler_offset = 0, epics_offset = 0;
+    for (const auto &path : input_files) {
+        FileInfo info;
+        info.path = path;
+        info.scaler_offset = scaler_offset;
+        info.epics_offset = epics_offset;
+        info.scaler_entries = tree_entries(path, "scalers");
+        info.epics_entries = tree_entries(path, "epics");
+        scaler_offset += static_cast<size_t>(info.scaler_entries);
+        epics_offset += static_cast<size_t>(info.epics_entries);
+        file_info.push_back(std::move(info));
+    }
 
     // Sort scalers once and precompute delta livetime per row.  Cuts evaluate
     // and report against the slice-local live fraction (Δgated / Δungated),
@@ -1145,6 +1217,382 @@ int run(const std::vector<std::string> &input_files,
         o << std::fixed << std::setprecision(2) << (r * 100.0) << "%";
         return o.str();
     };
+
+    if (input_files.size() > 1) {
+        std::filesystem::create_directories(output_path);
+        std::vector<size_t> all_file_indices(input_files.size());
+        for (size_t i = 0; i < all_file_indices.size(); ++i) all_file_indices[i] = i;
+
+        auto write_slow_trees = [&](TFile &out, const std::vector<size_t> &file_indices,
+                                    int s, bool restrict_side) -> int {
+            {
+                prad2::RawScalerData sc;
+                bool good = false;
+                out.cd();
+                TTree *out_sc = new TTree("scalers", "PRad2 DSC2 scaler readouts (concatenated)");
+                prad2::SetScalerWriteBranches(out_sc, sc);
+                out_sc->Branch("good", &good, "good/O");
+                for (size_t fi : file_indices) {
+                    std::unique_ptr<TFile> f(TFile::Open(file_info[fi].path.c_str(), "READ"));
+                    TTree *t = f ? dynamic_cast<TTree *>(f->Get("scalers")) : nullptr;
+                    if (!t) continue;
+                    prad2::SetScalerReadBranches(t, sc);
+                    size_t seq = file_info[fi].scaler_offset;
+                    Long64_t n = t->GetEntries();
+                    for (Long64_t i = 0; i < n; ++i, ++seq) {
+                        t->GetEntry(i);
+                        good = (seq < scaler_verdict.size()) ? scaler_verdict[seq] : false;
+                        if (good && restrict_side)
+                            good = (seq < scaler_side.size() && scaler_side[seq] == s);
+                        out.cd();
+                        out_sc->Fill();
+                    }
+                }
+                out.cd();
+                out_sc->Write();
+            }
+            {
+                prad2::RawEpicsData ep;
+                std::vector<std::string> *cp = &ep.channel;
+                std::vector<double> *vp = &ep.value;
+                bool good = false;
+                out.cd();
+                TTree *out_ep = new TTree("epics", "PRad2 EPICS slow control (concatenated)");
+                prad2::SetEpicsWriteBranches(out_ep, ep);
+                out_ep->Branch("good", &good, "good/O");
+                for (size_t fi : file_indices) {
+                    std::unique_ptr<TFile> f(TFile::Open(file_info[fi].path.c_str(), "READ"));
+                    TTree *t = f ? dynamic_cast<TTree *>(f->Get("epics")) : nullptr;
+                    if (!t) continue;
+                    t->SetBranchAddress("event_number_at_arrival", &ep.event_number_at_arrival);
+                    const bool has_ticks_in = (t->GetBranch("ti_ticks_at_arrival") != nullptr);
+                    if (has_ticks_in)
+                        t->SetBranchAddress("ti_ticks_at_arrival", &ep.ti_ticks_at_arrival);
+                    t->SetBranchAddress("unix_time",    &ep.unix_time);
+                    t->SetBranchAddress("sync_counter", &ep.sync_counter);
+                    t->SetBranchAddress("run_number",   &ep.run_number);
+                    t->SetBranchAddress("channel", &cp);
+                    t->SetBranchAddress("value",   &vp);
+                    size_t seq = file_info[fi].epics_offset;
+                    Long64_t n = t->GetEntries();
+                    for (Long64_t i = 0; i < n; ++i, ++seq) {
+                        ep.ti_ticks_at_arrival = 0;
+                        t->GetEntry(i);
+                        if (ep.ti_ticks_at_arrival <= 0 && ep.event_number_at_arrival >= 0) {
+                            auto eit = evn_to_ticks.find(ep.event_number_at_arrival);
+                            if (eit != evn_to_ticks.end()) ep.ti_ticks_at_arrival = eit->second;
+                        }
+                        good = (seq < epics_verdict.size()) ? epics_verdict[seq] : false;
+                        if (good && restrict_side)
+                            good = (seq < epics_side.size() && epics_side[seq] == s);
+                        out.cd();
+                        out_ep->Fill();
+                    }
+                }
+                out.cd();
+                out_ep->Write();
+            }
+            {
+                prad2::RawRunInfo ri;
+                std::string *sp = &ri.daq_config;
+                out.cd();
+                TTree *out_ri = new TTree("runinfo", "PRad2 control events / DAQ config (concatenated)");
+                prad2::SetRunInfoWriteBranches(out_ri, ri);
+                for (size_t fi : file_indices) {
+                    std::unique_ptr<TFile> f(TFile::Open(file_info[fi].path.c_str(), "READ"));
+                    TTree *t = f ? dynamic_cast<TTree *>(f->Get("runinfo")) : nullptr;
+                    if (!t) continue;
+                    prad2::SetRunInfoReadBranches(t, ri);
+                    t->SetBranchAddress("daq_config", &sp);
+                    Long64_t n = t->GetEntries();
+                    for (Long64_t i = 0; i < n; ++i) {
+                        ri.daq_config.clear();
+                        t->GetEntry(i);
+                        out.cd();
+                        out_ri->Fill();
+                    }
+                }
+                out.cd();
+                out_ri->Write();
+            }
+            return 0;
+        };
+
+        struct WriteStats { int64_t n_in = 0, n_out = 0; };
+        auto write_file_side = [&](size_t fi, int s, const std::string &outp) -> WriteStats {
+            WriteStats stats;
+            std::unique_ptr<TFile> out(TFile::Open(outp.c_str(), "RECREATE"));
+            if (!out || out->IsZombie()) {
+                std::cerr << "replay_filter: cannot create " << outp << "\n";
+                return stats;
+            }
+
+            if (!is_recon) {
+                prad2::RawEventData ev;
+                prad2::RawReadStatus first_status;
+                {
+                    std::unique_ptr<TFile> f0(TFile::Open(file_info[fi].path.c_str(), "READ"));
+                    TTree *t0 = f0 ? dynamic_cast<TTree *>(f0->Get("events")) : nullptr;
+                    first_status = prad2::SetRawReadBranches(t0, ev);
+                }
+                out->cd();
+                TTree *out_ev = new TTree("events", "PRad2 filtered replay (raw)");
+                prad2::SetRawWriteBranches(out_ev, ev, first_status.has_peaks);
+                std::unique_ptr<TFile> f(TFile::Open(file_info[fi].path.c_str(), "READ"));
+                TTree *t = f ? dynamic_cast<TTree *>(f->Get("events")) : nullptr;
+                if (t) {
+                    prad2::SetRawReadBranches(t, ev);
+                    std::vector<uint32_t> *p_ssp = &ev.ssp_raw;
+                    if (t->GetBranch("ssp_raw")) t->SetBranchAddress("ssp_raw", &p_ssp);
+                    std::vector<uint32_t> *p_vtp_roc = &ev.vtp_roc_tags, *p_vtp_nw = &ev.vtp_nwords, *p_vtp_w = &ev.vtp_words;
+                    if (t->GetBranch("vtp_roc_tags")) t->SetBranchAddress("vtp_roc_tags", &p_vtp_roc);
+                    if (t->GetBranch("vtp_nwords"))   t->SetBranchAddress("vtp_nwords",   &p_vtp_nw);
+                    if (t->GetBranch("vtp_words"))    t->SetBranchAddress("vtp_words",    &p_vtp_w);
+                    std::vector<uint32_t> *p_tdc_roc = &ev.tdc_roc_tags, *p_tdc_nw = &ev.tdc_nwords, *p_tdc_w = &ev.tdc_words;
+                    if (t->GetBranch("tdc_roc_tags")) t->SetBranchAddress("tdc_roc_tags", &p_tdc_roc);
+                    if (t->GetBranch("tdc_nwords"))   t->SetBranchAddress("tdc_nwords",   &p_tdc_nw);
+                    if (t->GetBranch("tdc_words"))    t->SetBranchAddress("tdc_words",    &p_tdc_w);
+                    Long64_t n = t->GetEntries();
+                    if (!split_active) stats.n_in += n;
+                    for (Long64_t i = 0; i < n; ++i) {
+                        ev.ssp_raw.clear(); ev.vtp_roc_tags.clear(); ev.vtp_nwords.clear(); ev.vtp_words.clear();
+                        ev.tdc_roc_tags.clear(); ev.tdc_nwords.clear(); ev.tdc_words.clear();
+                        t->GetEntry(i);
+                        if (split_active && in_span(s, ev.event_num)) ++stats.n_in;
+                        if (is_kept(s, ev.event_num)) {
+                            out->cd();
+                            out_ev->Fill();
+                            ++stats.n_out;
+                        }
+                    }
+                }
+                out->cd();
+                out_ev->Write();
+            } else {
+                prad2::ReconEventData ev;
+                out->cd();
+                TTree *out_ev = new TTree("recon", "PRad2 filtered replay (recon)");
+                prad2::SetReconWriteBranches(out_ev, ev);
+                std::unique_ptr<TFile> f(TFile::Open(file_info[fi].path.c_str(), "READ"));
+                TTree *t = f ? dynamic_cast<TTree *>(f->Get("recon")) : nullptr;
+                if (t) {
+                    prad2::SetReconReadBranches(t, ev);
+                    std::vector<uint32_t> *p_ssp = &ev.ssp_raw;
+                    if (t->GetBranch("ssp_raw")) t->SetBranchAddress("ssp_raw", &p_ssp);
+                    std::vector<uint32_t> *p_vtp_roc = &ev.vtp_roc_tags, *p_vtp_nw = &ev.vtp_nwords, *p_vtp_w = &ev.vtp_words;
+                    if (t->GetBranch("vtp_roc_tags")) t->SetBranchAddress("vtp_roc_tags", &p_vtp_roc);
+                    if (t->GetBranch("vtp_nwords"))   t->SetBranchAddress("vtp_nwords",   &p_vtp_nw);
+                    if (t->GetBranch("vtp_words"))    t->SetBranchAddress("vtp_words",    &p_vtp_w);
+                    Long64_t n = t->GetEntries();
+                    if (!split_active) stats.n_in += n;
+                    for (Long64_t i = 0; i < n; ++i) {
+                        ev.ssp_raw.clear(); ev.vtp_roc_tags.clear(); ev.vtp_nwords.clear(); ev.vtp_words.clear();
+                        t->GetEntry(i);
+                        if (split_active && in_span(s, ev.event_num)) ++stats.n_in;
+                        if (is_kept(s, ev.event_num)) {
+                            out->cd();
+                            out_ev->Fill();
+                            ++stats.n_out;
+                        }
+                    }
+                }
+                out->cd();
+                out_ev->Write();
+            }
+            std::vector<size_t> one{fi};
+            write_slow_trees(*out, one, s, split_active);
+            out->Close();
+            return stats;
+        };
+
+        std::vector<std::pair<size_t, int>> jobs;
+        for (size_t fi = 0; fi < input_files.size(); ++fi) {
+            if (!split_active) jobs.emplace_back(fi, 0);
+            else {
+                if (n_cp_side[0] > 0) jobs.emplace_back(fi, 0);
+                if (n_cp_side[1] > 0) jobs.emplace_back(fi, 1);
+            }
+        }
+
+        std::vector<std::string> output_files(jobs.size());
+        std::vector<WriteStats> job_stats(jobs.size());
+        std::atomic<size_t> next_job{0};
+        std::mutex log_mtx;
+        const size_t workers = std::min<size_t>(std::max(1, num_threads), jobs.size());
+        std::vector<std::thread> threads;
+        threads.reserve(workers);
+        for (size_t w = 0; w < workers; ++w) {
+            threads.emplace_back([&]() {
+                while (true) {
+                    size_t ji = next_job.fetch_add(1);
+                    if (ji >= jobs.size()) break;
+                    const auto [fi, s] = jobs[ji];
+                    const std::string label = split_active
+                        ? (s == 0 ? cuts.split.label_full : cuts.split.label_empty)
+                        : std::string();
+                    std::string outp = filtered_output_path(output_path, file_info[fi].path, label);
+                    job_stats[ji] = write_file_side(fi, s, outp);
+                    output_files[ji] = outp;
+                    std::lock_guard<std::mutex> lk(log_mtx);
+                    std::cerr << "replay_filter: output ROOT     " << outp << "\n";
+                }
+            });
+        }
+        for (auto &t : threads) t.join();
+
+        const std::string slow_out = run_epics_path(output_path, run_number);
+        {
+            std::unique_ptr<TFile> out(TFile::Open(slow_out.c_str(), "RECREATE"));
+            if (!out || out->IsZombie()) {
+                std::cerr << "replay_filter: cannot create " << slow_out << "\n";
+                return 1;
+            }
+            write_slow_trees(*out, all_file_indices, 0, false);
+            out->Close();
+        }
+        std::cerr << "replay_filter: run slow ROOT  " << slow_out << "\n";
+
+        int64_t n_in_total = 0, n_pass_phys = 0;
+        for (const auto &st : job_stats) {
+            n_in_total += st.n_in;
+            n_pass_phys += st.n_out;
+        }
+
+        auto to_json_or_null = [](bool valid, double v) -> json {
+            return valid ? json(v) : json(nullptr);
+        };
+        auto stats_for = [&](const ChannelCut &c) -> json {
+            json s = {
+                {"abs_min", c.abs.has_min ? json(c.abs.min_val) : json(nullptr)},
+                {"abs_max", c.abs.has_max ? json(c.abs.max_val) : json(nullptr)},
+            };
+            if (c.has_rel_rms) {
+                s["rel_rms"]       = c.rel_rms_n;
+                s["robust_center"] = to_json_or_null(c.stats_valid, c.robust_center);
+                s["robust_sigma"]  = to_json_or_null(c.stats_valid, c.robust_sigma);
+                s["mad"]           = to_json_or_null(c.stats_valid, c.mad);
+                s["n_used"]        = c.n_used;
+                s["n_clipped"]     = c.n_clipped;
+                if (!c.gated_by.empty()) s["gated_by"] = c.gated_by;
+            }
+            return s;
+        };
+
+        json report;
+        report["run_number"] = run_number;
+        report["input_files"] = input_files;
+        report["output_files"] = output_files;
+        report["slow_output_file"] = slow_out;
+        report["cuts"] = cuts.raw;
+        report["robust_method"] = "mad";
+
+        json stats = json::object();
+        if (cuts.livetime.enabled) {
+            json ls = stats_for(cuts.livetime.cut);
+            ls["source"] = cuts.livetime.source;
+            ls["channel"] = cuts.livetime.channel;
+            stats["livetime"] = std::move(ls);
+        }
+        for (const auto &kv : cuts.epics)
+            stats["epics:" + kv.first] = stats_for(kv.second);
+        report["stats"] = std::move(stats);
+
+        int n_pass_cp = 0, n_fail_cp = 0;
+        for (const auto &cp : timeline)
+            (cp.overall_pass ? n_pass_cp : n_fail_cp)++;
+        std::map<std::string, std::pair<int, int>> per_channel;
+        for (const auto &p : report_points) {
+            auto &c = per_channel[p.channel];
+            if (p.pass) ++c.first; else ++c.second;
+        }
+        json per_channel_json = json::object();
+        for (const auto &kv : per_channel) {
+            int pass = kv.second.first, fail = kv.second.second, tot = pass + fail;
+            per_channel_json[kv.first] = {
+                {"n_pass", pass},
+                {"n_fail", fail},
+                {"pass_rate", tot > 0 ? double(pass) / double(tot) : 0.0},
+            };
+        }
+        json keep_intervals = json::array();
+        for (int s = 0; s <= (split_active ? 1 : 0); ++s)
+            for (const auto &p : keep[s])
+                keep_intervals.push_back({p.first, p.second});
+
+        report["summary"] = {
+            {"n_slow_events", (int)timeline.size()},
+            {"n_slow_pass", n_pass_cp},
+            {"n_slow_reject", n_fail_cp},
+            {"slow_pass_rate", timeline.empty() ? 0.0 : double(n_pass_cp) / double(timeline.size())},
+            {"n_physics_in", n_in_total},
+            {"n_physics_pass", n_pass_phys},
+            {"n_physics_reject", n_in_total - n_pass_phys},
+            {"physics_pass_rate", n_in_total > 0 ? double(n_pass_phys) / double(n_in_total) : 0.0},
+            {"n_keep_intervals", (int)keep_intervals.size()},
+            {"per_channel", per_channel_json},
+        };
+        report["keep_intervals"] = std::move(keep_intervals);
+        if (split_active) {
+            report["split"] = {
+                {"enabled", true},
+                {"channel", cuts.split.channel},
+                {"full_threshold", cuts.split.full_thresh},
+                {"empty_threshold", cuts.split.empty_thresh},
+                {"guard_checkpoints", cuts.split.guard_checkpoints},
+                {"labels", {cuts.split.label_full, cuts.split.label_empty}},
+                {"n_checkpoints_full", n_cp_side[0]},
+                {"n_checkpoints_empty", n_cp_side[1]},
+                {"n_checkpoints_dropped", n_cp_guard},
+                {"n_state_transitions", n_state_transitions},
+                {"transitions", transitions},
+                {"pure_run", n_state_transitions == 0},
+            };
+        }
+        if (cuts.charge.enabled) {
+            report["live_charge"] = {
+                {"value_nC", live_charge[0] + live_charge[1]},
+                {"unit", "nC"},
+                {"beam_current_channel", cuts.charge.beam_current_channel},
+                {"beam_current_unit", "nA"},
+                {"live_seconds", live_charge_secs[0] + live_charge_secs[1]},
+                {"real_seconds", real_secs[0] + real_secs[1]},
+                {"ungated_value_nC", ungated_live_charge[0] + ungated_live_charge[1]},
+                {"ungated_live_seconds", ungated_live_charge_secs[0] + ungated_live_charge_secs[1]},
+                {"ungated_real_seconds", ungated_real_secs[0] + ungated_real_secs[1]},
+                {"n_pairs_integrated", n_charge_pairs[0] + n_charge_pairs[1]},
+                {"n_pairs_skipped", n_charge_skipped[0] + n_charge_skipped[1]},
+                {"n_ungated_pairs_integrated", n_ungated_charge_pairs[0] + n_ungated_charge_pairs[1]},
+                {"n_ungated_pairs_skipped", n_ungated_charge_skipped[0] + n_ungated_charge_skipped[1]},
+            };
+        }
+        json pts = json::array();
+        pts.get_ptr<json::array_t *>()->reserve(report_points.size());
+        for (const auto &p : report_points) {
+            pts.push_back({
+                {"channel", p.channel},
+                {"status", p.pass ? "pass" : "fail"},
+                {"associated_evn", p.event_number},
+                {"associated_timestamp", p.has_assoc_t ? json(p.assoc_t_rel) : json(nullptr)},
+                {"unix_time", p.has_unix_time ? json(p.unix_time) : json(nullptr)},
+                {"value", std::isnan(p.value) ? json(nullptr) : json(p.value)},
+            });
+        }
+        report["points"] = std::move(pts);
+
+        std::ofstream of(report_path);
+        if (!of) {
+            std::cerr << "replay_filter: cannot write " << report_path << "\n";
+            return 1;
+        }
+        of << report.dump(2) << "\n";
+        std::cerr << "replay_filter: report written to " << report_path << "\n";
+        std::cerr << "  physics      : in=" << n_in_total
+                  << "  pass=" << n_pass_phys
+                  << "  reject=" << (n_in_total - n_pass_phys)
+                  << "  rate=" << fmt_pct(n_in_total > 0 ? double(n_pass_phys) / n_in_total : 0)
+                  << "\n";
+        return 0;
+    }
 
     auto write_side = [&](int s, const std::string &outp,
                           const std::string &repp) -> int {
@@ -1638,17 +2086,22 @@ void usage(const char *prog)
 {
     std::cerr <<
         "Usage: " << prog << " <input.root> [more.root ...]\n"
-        "       -o <output.root>  -c <cuts.json> [-j <report.json>] [-r <run_num>]\n"
+        "       -o <output.root|output_dir>  -c <cuts.json> [-j <report.json>]\n"
+        "       [-r <run_num>] [-t threads]\n"
         "\n"
         "Filters replayed ROOT files by slow-control cuts (DSC2 livetime\n"
         "+ EPICS).  Writes a single ROOT file with the kept physics events\n"
         "and the full scaler/epics streams concatenated, plus a JSON report\n"
         "with per-(cut, slow-event) pass/fail status for chart plotting.\n"
+        "With multiple inputs, -o is an output directory; one filtered ROOT\n"
+        "is written per input by inserting _filter before the final .root,\n"
+        "plus prad_<run>_epics.root and one run-level JSON report.\n"
         "\n"
         "With a \"split\" block events are instead classified by a PV level\n"
         "(e.g. target cell pressure) and the full/empty subsets written to\n"
-        "separate files <stem>_<full>.root / <stem>_<empty>.root, each with\n"
-        "its own report and live-charge integral.  PV>=full and PV<=empty\n"
+        "separate files <stem>_<full>.root / <stem>_<empty>.root.  Single-input\n"
+        "mode writes side reports; multi-input mode writes one run-level report.\n"
+        "PV>=full and PV<=empty\n"
         "select the two states; the in-between ramp lands in neither.  Only\n"
         "the states that occur are written, so a pure run yields one file.\n"
         "\n"
@@ -1676,14 +2129,18 @@ int main(int argc, char *argv[])
     std::vector<std::string> inputs;
     std::string output, cuts_path, report_path;
     int run_override = -1;
+    int num_threads = 1;
+
+    ROOT::EnableThreadSafety();
 
     int opt;
-    while ((opt = getopt(argc, argv, "o:c:j:r:h")) != -1) {
+    while ((opt = getopt(argc, argv, "o:c:j:r:t:h")) != -1) {
         switch (opt) {
         case 'o': output       = optarg;           break;
         case 'c': cuts_path    = optarg;           break;
         case 'j': report_path  = optarg;           break;
         case 'r': run_override = std::atoi(optarg); break;
+        case 't': num_threads  = std::atoi(optarg); break;
         case 'h': usage(argv[0]); return 0;
         default:  usage(argv[0]); return 1;
         }
@@ -1694,11 +2151,17 @@ int main(int argc, char *argv[])
         usage(argv[0]);
         return 1;
     }
+    num_threads = std::max(1, num_threads);
     if (report_path.empty()) {
-        auto dot = output.rfind('.');
-        report_path = (dot == std::string::npos)
-            ? output + ".report.json"
-            : output.substr(0, dot) + ".report.json";
+        if (inputs.size() > 1) {
+            int rn = run_override >= 0 ? run_override : analysis::get_run_int(inputs.front());
+            report_path = run_report_path(output, rn);
+        } else {
+            auto dot = output.rfind('.');
+            report_path = (dot == std::string::npos)
+                ? output + ".report.json"
+                : output.substr(0, dot) + ".report.json";
+        }
     }
-    return run(inputs, output, cuts_path, report_path, run_override);
+    return run(inputs, output, cuts_path, report_path, run_override, num_threads);
 }

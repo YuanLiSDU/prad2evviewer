@@ -1,10 +1,10 @@
 //=============================================================================
 // replay_recon — convert multiple EVIO files to reconstructed ROOT trees (multi-threaded)
 //
-// Usage: replay_recon <evio_file_or_dir> [more files/dirs...]
+// Usage: prad2ana_replay_recon <evio_file_or_dir> [more files/dirs...]
 //                     -o output_dir [-f max_files] [-n max_events] [-p] [-j num_threads]
 //                     [-c daq_config.json] [-d daq_map.json]
-//                     [-g gem_pedestal.json] [-z zerosup_threshold]
+//                     [-g gem_pedestal.json] [-z zerosup_threshold] [-m merge_files]
 //   -o  output directory (REQUIRED)
 //   -f  max files to process (default: all)
 //   -n  max events per file (default: all)
@@ -14,6 +14,7 @@
 //   -d  HyCal map file (default: <db>/hycal_map.json)
 //   -g  GEM pedestal file
 //   -z  zero-suppression threshold override
+//   -m  merge this many split ROOT files per hadd output (default: 62; 0 disables)
 //=============================================================================
 
 #include "Replay.h"
@@ -23,6 +24,7 @@
 #include <iostream>
 #include <string>
 #include <cstdlib>
+#include <cstdio>
 #include <getopt.h>
 #include <filesystem>
 #include <algorithm>
@@ -149,6 +151,31 @@ static std::string makeOutputFile(const std::string &evio_path)
     return out;
 }
 
+static int runHadd(const std::string &output, const std::vector<std::string> &inputs)
+{
+    std::vector<std::string> args{"hadd", "-f", output};
+    args.insert(args.end(), inputs.begin(), inputs.end());
+
+    std::vector<char *> argv;
+    argv.reserve(args.size() + 1);
+    for (auto &s : args)
+        argv.push_back(s.data());
+    argv.push_back(nullptr);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        execvp(argv[0], argv.data());
+        std::cerr << "hadd execvp failed: " << std::strerror(errno) << "\n";
+        _exit(127);
+    }
+    int status = 0;
+    if (pid < 0 || waitpid(pid, &status, 0) < 0) {
+        std::cerr << "hadd failed: " << std::strerror(errno) << "\n";
+        return 1;
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+
 int main(int argc, char *argv[])
 {
     // Initialize ROOT for multi-threading
@@ -163,6 +190,7 @@ int main(int argc, char *argv[])
     float zerosup_override = 0.f;
     int max_files = -1;
     int num_threads = 4;
+    int merge_batch_size = 62;
     bool prad1 = false;
 
     std::string db_dir = prad2::resolve_data_dir(
@@ -172,7 +200,7 @@ int main(int argc, char *argv[])
     daq_config = db_dir + "/daq_config.json"; // default DAQ config for PRad2
 
     int opt;
-    while ((opt = getopt(argc, argv, "o:f:c:d:j:g:z:p")) != -1) {
+    while ((opt = getopt(argc, argv, "o:f:c:d:j:g:z:m:p")) != -1) {
         switch (opt) {
             case 'o': output_dir = optarg; break;
             case 'f': max_files = std::atoi(optarg); break;
@@ -181,6 +209,7 @@ int main(int argc, char *argv[])
             case 'j': num_threads = std::atoi(optarg); break;
             case 'g': gem_ped_file = optarg; break;
             case 'z': zerosup_override = std::atof(optarg); break;
+            case 'm': merge_batch_size = std::atoi(optarg); break;
             case 'p': prad1 = true; break;
         }
     }
@@ -193,18 +222,22 @@ int main(int argc, char *argv[])
     }
 
     if (evio_files.empty() || output_dir.empty()) {
-        std::cerr << "Usage: replay_recon <evio_file_or_dir> [more files/dirs...] -o output_dir\n"
-                  << "       [-f max_files] [-j threads] [-D daq_config.json]\n"
-                  << "       [-g gem_ped.json] [-z threshold] [-p]\n";
+        std::cerr << "Usage: prad2ana_replay_recon <evio_file_or_dir> [more files/dirs...] -o output_dir\n"
+                  << "       [-f max_files] [-j threads] [-c daq_config.json] [-d daq_map.json]\n"
+                  << "       [-g gem_ped.json] [-z threshold] [-m merge_files] [-p]\n";
         std::cerr << "  -o  output directory (REQUIRED)\n";
         std::cerr << "  -f  max files to process (default: all)\n";
         std::cerr << "  -j  number of threads (default: 4)\n";
-        std::cerr << "  -D  DAQ config JSON (default: <db>/daq_config.json)\n";
+        std::cerr << "  -c  DAQ config JSON (default: <db>/daq_config.json)\n";
+        std::cerr << "  -d  HyCal map JSON (default: <db>/hycal_map.json)\n";
         std::cerr << "  -g  GEM pedestal JSON\n";
         std::cerr << "  -z  zero-suppression threshold override\n";
+        std::cerr << "  -m  merge this many split ROOT files per hadd output (default: 62; 0 disables)\n";
         std::cerr << "  -p  PRad1 mode (no GEM)\n";
         return 1;
     }
+    if (merge_batch_size < 0)
+        merge_batch_size = 0;
     int num_files = static_cast<int>(evio_files.size());
     if (max_files > 0) num_files = std::min(num_files, max_files);
     num_threads = std::max(1, std::min(num_threads, num_files));
@@ -237,6 +270,8 @@ int main(int argc, char *argv[])
     std::atomic<int> next_file{0};
     std::mutex io_mtx;
     std::atomic<int> errors{0};
+    std::vector<std::string> output_files(num_files);
+    std::vector<char> output_ok(num_files, 0);
 
     auto worker = [&]() {
         // each thread gets its own Replay instance (own EvChannel, own buffers)
@@ -252,6 +287,9 @@ int main(int argc, char *argv[])
             std::string out = output_dir + "/" + makeOutputFile(evio_files[idx]);
             bool ok = replay.ProcessWithRecon(evio_files[idx], out, gRunConfig, db_dir, daq_config,
                                               gem_ped_file, zerosup_override, prad1);
+            output_files[idx] = out;
+            if (ok)
+                output_ok[idx] = 1;
 
             std::lock_guard<std::mutex> lk(io_mtx);
             if (ok) {
@@ -275,6 +313,79 @@ int main(int argc, char *argv[])
     std::cout << "Done: " << num_files << " files"
               << (errors > 0 ? ", " + std::to_string(errors.load()) + " errors" : "")
               << "\n";
+
+    if (merge_batch_size == 0)
+        return errors > 0 ? 1 : 0;
+
+    std::map<int, std::vector<std::string>> outputs_by_run;
+    for (int i = 0; i < num_files; ++i)
+        if (output_ok[i])
+            outputs_by_run[get_run_int(evio_files[i])].push_back(output_files[i]);
+
+    struct MergeJob { std::string output; std::vector<std::string> inputs; };
+    std::vector<MergeJob> merge_jobs;
+    for (const auto &[rn, files] : outputs_by_run) {
+        for (std::size_t begin = 0, batch = 0; begin < files.size(); begin += merge_batch_size, ++batch) {
+            std::size_t end = std::min<std::size_t>(begin + merge_batch_size, files.size());
+            if (end - begin < 2)
+                continue;
+
+            char name[64];
+            std::snprintf(name, sizeof(name), "/prad_%06d_recon_%03zu.root", rn, batch);
+            merge_jobs.push_back({
+                output_dir + name,
+                std::vector<std::string>(files.begin() + begin, files.begin() + end)
+            });
+        }
+    }
+
+    if (!merge_jobs.empty()) {
+        std::size_t num_merge_threads = std::min<std::size_t>(merge_jobs.size(), num_threads);
+        std::cout << "Merging " << merge_jobs.size()
+                  << " batch(es) with " << num_merge_threads
+                  << " hadd process(es)\n";
+
+        std::atomic<std::size_t> next_merge{0};
+        std::vector<std::thread> merge_threads;
+        merge_threads.reserve(num_merge_threads);
+        for (std::size_t i = 0; i < num_merge_threads; ++i) {
+            merge_threads.emplace_back([&]() {
+                while (true) {
+                    std::size_t idx = next_merge.fetch_add(1);
+                    if (idx >= merge_jobs.size())
+                        break;
+
+                    const auto &job = merge_jobs[idx];
+                    {
+                        std::lock_guard<std::mutex> lk(io_mtx);
+                        std::cout << "Merging " << job.inputs.size() << " ROOT files -> " << job.output << "\n";
+                    }
+
+                    int rc = runHadd(job.output, job.inputs);
+                    if (rc != 0) {
+                        std::lock_guard<std::mutex> lk(io_mtx);
+                        std::cerr << "  hadd failed with code " << rc << " for " << job.output << "\n";
+                        errors++;
+                        continue;
+                    }
+
+                    for (const auto &remove_files : job.inputs) {
+                        std::error_code ec;
+                        if (!std::filesystem::remove(remove_files, ec) || ec) {
+                            std::lock_guard<std::mutex> lk(io_mtx);
+                            std::cerr << "  failed to remove merged input " << remove_files;
+                            if (ec)
+                                std::cerr << ": " << ec.message();
+                            std::cerr << "\n";
+                            errors++;
+                        }
+                    }
+                }
+            });
+        }
+        for (auto &t : merge_threads)
+            t.join();
+    }
 
     return errors > 0 ? 1 : 0;
 }

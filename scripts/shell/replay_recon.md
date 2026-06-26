@@ -1,7 +1,12 @@
 # replay_recon.sh
 
 A one-shot shell script that automates the full replay pipeline for a single PRad-II run on JLab ifarm:
-replay → merge → quick check → filter → live charge.
+replay recon → filter → live charge → quick check.
+
+`prad2ana_replay_recon` performs its own grouped `hadd` merge by default
+(80 split ROOT files per merged recon ROOT).  The script then filters all
+merged recon ROOTs in one invocation, runs live charge over all filtered ROOTs
+together, and writes every product directly under one run output directory.
 
 ---
 
@@ -32,14 +37,16 @@ bash /path/to/prad2evviewer/scripts/shell/replay_recon.sh
 
 The script prompts for the following inputs at startup. Press Enter to accept the default value shown in brackets.
 
-| Prompt | Description | Default |
-|--------|-------------|---------|
-| `Enter run number` | 6-digit run number, e.g. `024650` | *(required)* |
-| `Enter output base directory` | Root directory for all output files | `./` |
-| `Enter number of parallel jobs (-j)` | Number of replay threads | `50` |
-| `Enter GEM zero suppression (-z)` | zlib compression level | `5` |
-| `Enter max number of files to process (-f)` | Maximum number of EVIO sub-files to process | `10000` |
-| `Cut JSON [default]` | Path to the cut config file for `replay_filter`; type `default` to use the built-in template | `prad2evviewer/analysis/cuts/prad2_default.json` |
+
+| Prompt                                           | Description                                                                                 | Default                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `Enter run number`                               | 6-digit run number, e.g.`024650`                                                            | *(required)*                                     |
+| `Enter output base directory`                    | Root directory for all output files                                                         | `./`                                             |
+| `Enter number of parallel jobs (-j)`             | Shared CPU count for`replay_recon -j`, `replay_filter -t`, and `quick_check -j`             | `50`                                             |
+| `Enter GEM zero suppression (-z)`                | GEM zero-suppression sigma threshold                                                        | `5`                                              |
+| `Enter max number of files to process (-f)`      | Maximum number of EVIO sub-files to process                                                 | `10000`                                          |
+| `Enter replay merge group size (-m, 0 disables)` | Number of split recon ROOT files per merged output                                          | `80`                                             |
+| `Cut JSON [default]`                             | Path to the cut config file for`replay_filter`; type `default` to use the built-in template | `prad2evviewer/analysis/cuts/prad2_default.json` |
 
 All defaults can also be overridden via environment variables before running:
 
@@ -47,25 +54,28 @@ All defaults can also be overridden via environment variables before running:
 PRAD2_SOFT=/data/soft/prad2evviewer OUTPUT_BASE=/data/recon bash replay_recon.sh
 ```
 
-| Variable | Description |
-|----------|-------------|
-| `PRAD2_SOFT` | Root directory of the prad2evviewer source/installation |
-| `PRAD2_BIN` | Executable directory (default: `$PRAD2_SOFT/build/bin`) |
-| `CACHE_BASE` | Base directory for EVIO input data |
-| `OUTPUT_BASE` | Base directory for all output files |
-| `REPLAY_CORES` | Number of parallel replay threads |
-| `REPLAY_ZERO_SUPPRESS` | zlib compression level |
-| `REPLAY_MAX_FILES` | Maximum number of EVIO sub-files to process |
-| `DEFAULT_CUTS` | Path to the default cut JSON file |
+
+| Variable               | Description                                                             |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `PRAD2_SOFT`           | Root directory of the prad2evviewer source/installation                 |
+| `PRAD2_BIN`            | Executable directory (default:`$PRAD2_SOFT/build/bin`)                  |
+| `CACHE_BASE`           | Base directory for EVIO input data                                      |
+| `OUTPUT_BASE`          | Base directory for all output files                                     |
+| `REPLAY_CORES`         | Shared CPU count for replay, filter, and quick check                    |
+| `REPLAY_ZERO_SUPPRESS` | GEM zero-suppression sigma threshold                                    |
+| `REPLAY_MAX_FILES`     | Maximum number of EVIO sub-files to process                             |
+| `REPLAY_MERGE_FILES`   | Number of split recon ROOT files per merged output;`0` disables merging |
+| `DEFAULT_CUTS`         | Path to the default cut JSON file                                       |
 
 ---
 
 ## Input Files
 
-| Content | Path |
-|---------|------|
-| EVIO raw data | `/cache/clas12/rg-o/data/prad_<RUN>/` |
-| Cut configuration | User-specified, or `prad2evviewer/analysis/cuts/prad2_default.json` |
+
+| Content           | Path                                                               |
+| ----------------- | ------------------------------------------------------------------ |
+| EVIO raw data     | `/cache/clas12/rg-o/data/prad_<RUN>/`                              |
+| Cut configuration | User-specified, or`prad2evviewer/analysis/cuts/prad2_default.json` |
 
 ---
 
@@ -73,14 +83,16 @@ PRAD2_SOFT=/data/soft/prad2evviewer OUTPUT_BASE=/data/recon bash replay_recon.sh
 
 All output files are written to `<OUTPUT_BASE>/prad_<RUN>/`:
 
-| File | Description |
-|------|-------------|
-| `prad_<RUN>.00**_recon.root` | Per-sub-file ROOT output from replay (deleted after merging) |
-| `prad_<RUN>_recon.root` | Merged recon ROOT file |
-| `prad_<RUN>_quick_check.root` | Quick-check histograms (auto-named by `prad2ana_quick_check`) |
-| `prad_<RUN>_filtered.root` | Physics events passing the slow-control cuts |
-| `prad_<RUN>_filter_report.json` | Per-checkpoint filter verdict from `replay_filter` |
-| `prad_<RUN>_live_charge.json` | Live charge result in nC from `live_charge` |
+
+| File                                                                        | Description                                                                  |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `prad_<RUN>.XXXXX_recon.root`                                               | Per-split recon ROOT output from replay                                      |
+| `prad_<RUN>_recon_000.root`, `prad_<RUN>_recon_001.root`, ...               | Merged recon ROOT files, grouped by`REPLAY_MERGE_FILES`                      |
+| `prad_<RUN>_recon_000_filter.root`, `prad_<RUN>_recon_001_filter.root`, ... | Filtered ROOT files, one per recon input                                     |
+| `prad_<RUN>_epics.root`                                                     | Run-level slow-control ROOT containing only`scalers`, `epics`, and `runinfo` |
+| `prad_<RUN>_filter_report.json`                                             | Run-level per-checkpoint filter verdict from`replay_filter`                  |
+| `prad_<RUN>_live_charge.json`                                               | Live charge result in nC from all filtered ROOT files                        |
+| `prad_<RUN>_quick_check.root`                                               | Quick-check histograms from all recon ROOT files                             |
 
 ---
 
@@ -92,12 +104,11 @@ All output files are written to `<OUTPUT_BASE>/prad_<RUN>/`:
 2. Count files in /cache input directory
    └─ If empty → submit jcache tape-staging request and exit
 3. Create output directory
-4. prad2ana_replay_recon    (multi-threaded replay)
-5. hadd                     (merge per-sub-file ROOT outputs)
-6. Delete per-sub-file ROOT outputs
-7. prad2ana_quick_check     (fast quality-check histograms)
-8. prad2ana_replay_filter   (apply slow-control cuts)
-9. prad2ana_live_charge     (compute live charge)
+4. prad2ana_replay_recon    (multi-threaded replay; grouped merge via -m)
+5. Select merged recon ROOTs, or per-split recon ROOTs when -m 0
+6. prad2ana_replay_filter   (apply slow-control cuts to all recon ROOTs)
+7. prad2ana_live_charge     (compute live charge from all filtered ROOTs)
+8. prad2ana_quick_check     (fast quality-check histograms from recon ROOTs)
 ```
 
 ---
@@ -126,6 +137,7 @@ Enter output base directory [./]: /home/liyuan/PRad2Analysis/data/recon
 Enter number of parallel jobs (-j) [50]:
 Enter GEM zero suppression (-z) [5]:
 Enter max number of files to process (-f) [10000]:
+Enter replay merge group size (-m, 0 disables) [80]:
 Enter cut JSON file for replay_filter (...):
 Cut JSON [default]:
 
@@ -135,10 +147,8 @@ Found 42 file(s) in /cache/clas12/rg-o/data/prad_024650:
 Output directory: /home/liyuan/PRad2Analysis/data/recon/prad_024650
 Starting replay...
 ...
-Merging 42 ROOT file(s) into: .../prad_024650/prad_024650_recon.root
-...
-Running quick check...
 Running replay filter...
 Running live charge calculation...
 Live charge JSON: .../prad_024650/prad_024650_live_charge.json
+Running quick check...
 ```

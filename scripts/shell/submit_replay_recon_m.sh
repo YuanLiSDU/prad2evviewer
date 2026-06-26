@@ -1,6 +1,12 @@
 #!/bin/bash
 # submit_replay_recon_m.sh
-# Submit multiple single-run PRad-II replay/recon Slurm jobs.
+# Submit multiple single-run PRad-II replay pipeline Slurm jobs.
+#
+# Prompts once for shared settings, then feeds each cached run to
+# submit_replay_recon.sh.  The CPU count is entered once and reused by
+# replay_recon -j, replay_filter -t, quick_check -j, and Slurm
+# --cpus-per-task in each generated job.  Each run writes all products
+# directly under <output_base>/prad_<RUN>/.
 
 set -euo pipefail
 
@@ -64,14 +70,15 @@ PRAD2_SOFT="${PRAD2_SOFT:-${DEFAULT_PRAD2_SOFT}}"
 PRAD2_BIN="${PRAD2_BIN:-${PRAD2_SOFT}/build/bin}"
 CACHE_BASE="${CACHE_BASE:-/cache/clas12/rg-o/data}"
 OUTPUT_BASE="${OUTPUT_BASE:-./}"
-REPLAY_CORES="${REPLAY_CORES:-50}"
+REPLAY_CORES="${REPLAY_CORES:-15}"
 REPLAY_ZERO_SUPPRESS="${REPLAY_ZERO_SUPPRESS:-5}"
 REPLAY_MAX_FILES="${REPLAY_MAX_FILES:-10000}"
+REPLAY_MERGE_FILES="${REPLAY_MERGE_FILES:-62}"
 DEFAULT_CUTS="${DEFAULT_CUTS:-${PRAD2_SOFT}/analysis/cuts/prad2_default.json}"
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-hallb}"
 SLURM_PARTITION="${SLURM_PARTITION:-production}"
 SLURM_TIME="${SLURM_TIME:-12:00:00}"
-SLURM_MEM_PER_CPU="${SLURM_MEM_PER_CPU:-2000}"
+SLURM_MEM_PER_CPU="${SLURM_MEM_PER_CPU:-1000}"
 ROOT_SETUP="${ROOT_SETUP:-}"
 
 echo "Submit multiple PRad-II replay/recon Slurm jobs"
@@ -131,6 +138,7 @@ OUTPUT_BASE="$(prompt_default "Enter output base directory" "${OUTPUT_BASE}")"
 REPLAY_CORES="$(prompt_default "Enter number of parallel jobs (-j)" "${REPLAY_CORES}")"
 REPLAY_ZERO_SUPPRESS="$(prompt_default "Enter GEM zero suppression (-z)" "${REPLAY_ZERO_SUPPRESS}")"
 REPLAY_MAX_FILES="$(prompt_default "Enter max number of files to process (-f)" "${REPLAY_MAX_FILES}")"
+REPLAY_MERGE_FILES="$(prompt_default "Enter replay merge group size (-m, 0 disables)" "${REPLAY_MERGE_FILES}")"
 
 echo "Enter cut JSON file for replay_filter (path to cuts.json, or 'default' to use ${DEFAULT_CUTS}):"
 read -rp "Cut JSON [default]: " CUT_INPUT
@@ -196,7 +204,7 @@ fi
 echo ""
 for run in "${CACHED_RUNS[@]}"; do
     echo "Submitting replay/recon job for run ${run}..."
-    if ! printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+    if ! printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
             "${run}" \
             "${PRAD2_SOFT}" \
             "${PRAD2_BIN}" \
@@ -205,6 +213,7 @@ for run in "${CACHED_RUNS[@]}"; do
             "${REPLAY_CORES}" \
             "${REPLAY_ZERO_SUPPRESS}" \
             "${REPLAY_MAX_FILES}" \
+            "${REPLAY_MERGE_FILES}" \
             "${CUT_INPUT_FOR_ONE}" \
             "${ROOT_SETUP_FOR_ONE}" \
             "${SLURM_ACCOUNT}" \

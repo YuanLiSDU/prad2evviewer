@@ -16,6 +16,20 @@ indexing with `events`/`recon`.  Join them by `event_number`
 below.  `runinfo` is run-scoped (one row per CODA control event:
 PRESTART / GO / END), with no row-level join key.
 
+`prad2ana_replay_recon` writes one per-split `_recon.root` first, then
+by default merges successful split outputs with `hadd` in groups of 80
+as `prad_<run>_recon_<batch>.root`.  Use `-m 0` to disable merged
+outputs, or `-m N` to change the number of split files per merged file.
+
+When `prad2ana_replay_filter` receives multiple replay ROOT files, it
+writes one filtered ROOT per input by inserting `_filter` before the
+final `.root`.  For example, `prad_024327_recon_000.root` becomes
+`prad_024327_recon_000_filter.root`.  It also writes a run-level
+`prad_<run>_epics.root` containing only `scalers`, `epics`, and
+`runinfo`, plus one run-level JSON report.  The shell replay pipeline
+writes these products side by side in `<output_base>/prad_<run>/`, with
+no filter subdirectory.
+
 # `events` tree (raw)
 
 Written by `prad2ana_replay_rawdata`.  Per-event scalars and per-channel

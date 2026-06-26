@@ -10,10 +10,10 @@ want to process.
    clondaq2:/data/stage2 ──► clonfarm11:/data/evio ──► prad2ana_replay_rawdata  ─┐
                                                   └─► prad2ana_replay_recon ────┤
                                                                                 ▼
-                                                                 prad2ana_replay_filter
+                                                                prad2ana_replay_filter
                                                                                 │
                                                                                 ▼
-                                                          *_filtered.root + *.report.json
+                                      *_filter.root + prad_<run>_epics.root + *.report.json
                                                                                 │
                                                                                 ▼
                                                           prad2ana_replay_report_viewer
@@ -77,13 +77,16 @@ Default thread count is 4; pass `-j N` to change it.
 ```
 mkdir -p /data/replay_recon/prad_024327
 prad2ana_replay_recon /data/evio/prad_024327 \
-    -o /data/replay_recon/prad_024327
+    -o /data/replay_recon/prad_024327 \
+    -j 8
 ```
 
 The recon output is what physics analyses normally consume; the raw
 output is mostly for diagnostics or if you need access to the FADC
 samples that the recon step has already collapsed into clusters. Pick
-one — there is no need to run both.
+one — there is no need to run both. By default replay recon also merges
+successful split outputs in groups of 80 with `hadd`; add `-m 0` if a
+cut workflow should keep only the per-split `_recon.root` files.
 
 ---
 
@@ -96,23 +99,37 @@ run, not per split file. The cut JSON template ships at
 for your analysis.
 
 ```
-cd /data/replay_recon          # or /data/replay_raw
-prad2ana_replay_filter prad_024327/*.root \
-    -o prad_024327_filtered.root \
-    -c /home/clasrun/prad2_daq/prad2evviewer/analysis/cuts/prad2_default.json
+cd /data/replay_recon/prad_024327
+prad2ana_replay_filter prad_024327_recon_*.root \
+    -o . \
+    -c /home/clasrun/prad2_daq/prad2evviewer/analysis/cuts/prad2_default.json \
+    -t 8
 ```
 
 Output:
 
-* `prad_024327_filtered.root` — the events/recon tree filtered to
-  events bracketed by adjacent "good" slow-control checkpoints, plus
-  the full `scalers` + `epics` trees concatenated from every input
-  file (with an extra `good` bool per row reflecting that
-  checkpoint's overall verdict).
-* `prad_024327_filtered.report.json` — per-(channel, checkpoint)
-  pass/fail trace, robust median + MAD per channel, `keep_intervals`,
-  and (when `charge` is configured) live-charge integration. Suitable
-  for plotting in a quality dashboard.
+* `prad_024327_recon_000_filter.root`, `prad_024327_recon_001_filter.root`,
+  ... — one filtered ROOT per input ROOT, named by inserting `_filter`
+  before the final `.root`; each file keeps its own `scalers`, `epics`,
+  and `runinfo` trees with an extra `good` bool on the slow trees.
+* `prad_024327_epics.root` — run-level `scalers`, `epics`, and `runinfo`
+  only, concatenated from every input file.
+* `prad_024327_filter_report.json` — per-(channel, checkpoint) pass/fail
+  trace, robust median + MAD per channel, `keep_intervals`, and (when
+  `charge` is configured) live-charge integration. Suitable for plotting
+  in a quality dashboard.
+
+Then compute post-cut live charge from all filtered ROOTs together:
+
+```
+prad2ana_live_charge prad_024327*_filter*.root \
+    -j prad_024327_live_charge.json
+```
+
+The convenience scripts in `scripts/shell/` run this sequence as
+`replay_recon -> replay_filter -> live_charge -> quick_check`, write all
+products directly under `<output_base>/prad_<run>/`, and reuse the same
+CPU count for replay, filter, and quick check.
 
 ### Cut JSON in 30 seconds
 
@@ -169,7 +186,7 @@ toolbar; **Save** dumps the current view as PNG/PDF.
 ### Headless
 
 ```
-prad2ana_replay_report_viewer --cli prad_024327_filtered.report.json
+prad2ana_replay_report_viewer --cli prad_024327_filter_report.json
 ```
 
 Renders one static figure with a row per channel — status on top, then

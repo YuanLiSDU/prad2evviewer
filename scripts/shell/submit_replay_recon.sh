@@ -1,6 +1,16 @@
 #!/bin/bash
 # submit_replay_recon.sh
-# Submit one PRad-II replay/recon job to JLab ifarm Slurm.
+# Submit one PRad-II replay pipeline job to JLab ifarm Slurm.
+#
+# The generated job runs:
+#   1. prad2ana_replay_recon, with optional grouped hadd merging via -m
+#   2. prad2ana_replay_filter over all recon ROOTs
+#   3. prad2ana_live_charge over all filtered ROOTs together
+#   4. prad2ana_quick_check over all recon ROOTs
+#
+# All outputs are written directly under <output_base>/prad_<RUN>/.
+# The requested CPU count is shared by replay_recon -j, replay_filter -t,
+# quick_check -j, and Slurm --cpus-per-task.
 
 set -euo pipefail
 
@@ -50,14 +60,15 @@ PRAD2_SOFT="${PRAD2_SOFT:-${DEFAULT_PRAD2_SOFT}}"
 PRAD2_BIN="${PRAD2_BIN:-${PRAD2_SOFT}/build/bin}"
 CACHE_BASE="${CACHE_BASE:-/cache/clas12/rg-o/data}"
 OUTPUT_BASE="${OUTPUT_BASE:-./}"
-REPLAY_CORES="${REPLAY_CORES:-50}"
+REPLAY_CORES="${REPLAY_CORES:-15}"
 REPLAY_ZERO_SUPPRESS="${REPLAY_ZERO_SUPPRESS:-5}"
 REPLAY_MAX_FILES="${REPLAY_MAX_FILES:-10000}"
+REPLAY_MERGE_FILES="${REPLAY_MERGE_FILES:-62}"
 DEFAULT_CUTS="${DEFAULT_CUTS:-${PRAD2_SOFT}/analysis/cuts/prad2_default.json}"
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-hallb}"
 SLURM_PARTITION="${SLURM_PARTITION:-production}"
 SLURM_TIME="${SLURM_TIME:-12:00:00}"
-SLURM_MEM_PER_CPU="${SLURM_MEM_PER_CPU:-2000}"
+SLURM_MEM_PER_CPU="${SLURM_MEM_PER_CPU:-1000}"
 ROOT_SETUP="${ROOT_SETUP:-}"
 
 echo "Submit one PRad-II replay/recon Slurm job"
@@ -82,6 +93,7 @@ OUTPUT_BASE="$(prompt_default "Enter output base directory" "${OUTPUT_BASE}")"
 REPLAY_CORES="$(prompt_default "Enter number of parallel jobs (-j)" "${REPLAY_CORES}")"
 REPLAY_ZERO_SUPPRESS="$(prompt_default "Enter GEM zero suppression (-z)" "${REPLAY_ZERO_SUPPRESS}")"
 REPLAY_MAX_FILES="$(prompt_default "Enter max number of files to process (-f)" "${REPLAY_MAX_FILES}")"
+REPLAY_MERGE_FILES="$(prompt_default "Enter replay merge group size (-m, 0 disables)" "${REPLAY_MERGE_FILES}")"
 
 echo "Enter cut JSON file for replay_filter (path to cuts.json, or 'default' to use ${DEFAULT_CUTS}):"
 read -rp "Cut JSON [default]: " _INPUT
@@ -110,9 +122,9 @@ fi
 OUTPUT_BASE="$(to_abs_path "${OUTPUT_BASE}" "${SUBMIT_DIR}")"
 OUT_DIR="${OUTPUT_BASE}/prad_${RUN_NUMBER}"
 RUN_DIR="${CACHE_BASE}/prad_${RUN_NUMBER}"
-MERGED="${OUT_DIR}/prad_${RUN_NUMBER}_recon.root"
-FILTERED="${OUT_DIR}/prad_${RUN_NUMBER}_filtered.root"
 REPORT="${OUT_DIR}/prad_${RUN_NUMBER}_filter_report.json"
+SLOW_ROOT="${OUT_DIR}/prad_${RUN_NUMBER}_epics.root"
+QC_OUTPUT="${OUT_DIR}/prad_${RUN_NUMBER}_quick_check.root"
 LC_JSON="${OUT_DIR}/prad_${RUN_NUMBER}_live_charge.json"
 SBATCH_SCRIPT="${OUT_DIR}/replay_recon_${RUN_NUMBER}.sbatch"
 
@@ -141,12 +153,8 @@ fi
 
 mkdir -p "${OUT_DIR}"
 
-for exe in prad2ana_replay_recon hadd; do
-    if [[ "${exe}" == "hadd" ]]; then
-        if ! command -v hadd >/dev/null 2>&1; then
-            echo "WARNING: hadd not found in submit environment; the job will check again on the compute node."
-        fi
-    elif [[ ! -x "${PRAD2_BIN}/${exe}" ]]; then
+for exe in prad2ana_replay_recon; do
+    if [[ ! -x "${PRAD2_BIN}/${exe}" ]]; then
         echo "ERROR: executable not found: ${PRAD2_BIN}/${exe}"
         exit 1
     fi
@@ -174,9 +182,10 @@ CUT_JSON=$(shell_quote "${CUT_JSON}")
 REPLAY_CORES=$(shell_quote "${REPLAY_CORES}")
 REPLAY_ZERO_SUPPRESS=$(shell_quote "${REPLAY_ZERO_SUPPRESS}")
 REPLAY_MAX_FILES=$(shell_quote "${REPLAY_MAX_FILES}")
-MERGED=$(shell_quote "${MERGED}")
-FILTERED=$(shell_quote "${FILTERED}")
+REPLAY_MERGE_FILES=$(shell_quote "${REPLAY_MERGE_FILES}")
 REPORT=$(shell_quote "${REPORT}")
+SLOW_ROOT=$(shell_quote "${SLOW_ROOT}")
+QC_OUTPUT=$(shell_quote "${QC_OUTPUT}")
 LC_JSON=$(shell_quote "${LC_JSON}")
 ROOT_SETUP=$(shell_quote "${ROOT_SETUP}")
 
@@ -194,10 +203,6 @@ fi
 
 if ! command -v root >/dev/null 2>&1; then
     echo "ERROR: root is not found in PATH. Set ROOT_SETUP or submit from a ROOT-ready environment."
-    exit 1
-fi
-if ! command -v hadd >/dev/null 2>&1; then
-    echo "ERROR: hadd is not found in PATH."
     exit 1
 fi
 echo "ROOT is available: \$(root-config --version 2>/dev/null || root --version 2>&1 | head -1)"
@@ -228,31 +233,20 @@ fi
 
 echo ""
 echo "Starting replay..."
-echo "\${REPLAY_CMD} \${RUN_DIR} -o \${OUT_DIR} -j \${REPLAY_CORES} -z \${REPLAY_ZERO_SUPPRESS} -f \${REPLAY_MAX_FILES}"
-"\${REPLAY_CMD}" "\${RUN_DIR}" -o "\${OUT_DIR}" -j "\${REPLAY_CORES}" -z "\${REPLAY_ZERO_SUPPRESS}" -f "\${REPLAY_MAX_FILES}"
+echo "\${REPLAY_CMD} \${RUN_DIR} -o \${OUT_DIR} -j \${REPLAY_CORES} -z \${REPLAY_ZERO_SUPPRESS} -f \${REPLAY_MAX_FILES} -m \${REPLAY_MERGE_FILES}"
+"\${REPLAY_CMD}" "\${RUN_DIR}" -o "\${OUT_DIR}" -j "\${REPLAY_CORES}" -z "\${REPLAY_ZERO_SUPPRESS}" -f "\${REPLAY_MAX_FILES}" -m "\${REPLAY_MERGE_FILES}"
 
-mapfile -t ROOT_FILES < <(find "\${OUT_DIR}" -maxdepth 1 -type f -name "prad_\${RUN_NUMBER}.*_recon.root" | sort)
-if [[ "\${#ROOT_FILES[@]}" -eq 0 ]]; then
-    echo "ERROR: no sub-file recon ROOT files found in \${OUT_DIR}."
+mapfile -t RECON_INPUTS < <(find "\${OUT_DIR}" -maxdepth 1 -type f -name "prad_\${RUN_NUMBER}_recon_*.root" | sort)
+if [[ "\${#RECON_INPUTS[@]}" -eq 0 ]]; then
+    mapfile -t RECON_INPUTS < <(find "\${OUT_DIR}" -maxdepth 1 -type f -name "prad_\${RUN_NUMBER}.*_recon.root" | sort)
+fi
+if [[ "\${#RECON_INPUTS[@]}" -eq 0 ]]; then
+    echo "ERROR: no reconstructed ROOT files found in \${OUT_DIR}."
     exit 1
 fi
+echo "Downstream input ROOT file(s): \${#RECON_INPUTS[@]}"
 
-echo ""
-echo "Merging \${#ROOT_FILES[@]} ROOT file(s) into: \${MERGED}"
-hadd -f "\${MERGED}" "\${ROOT_FILES[@]}"
-
-echo "Removing \${#ROOT_FILES[@]} sub-file(s)..."
-rm -f "\${ROOT_FILES[@]}"
-
-if [[ ! -x "\${QUICK_CHECK_CMD}" ]]; then
-    echo "WARNING: executable not found: \${QUICK_CHECK_CMD}, skipping quick check."
-else
-    echo ""
-    echo "Running quick check..."
-    "\${QUICK_CHECK_CMD}" "\${MERGED}"
-fi
-
-LC_INPUT="\${MERGED}"
+LC_INPUTS=()
 if [[ ! -x "\${FILTER_CMD}" ]]; then
     echo "WARNING: executable not found: \${FILTER_CMD}, skipping replay filter."
 elif [[ ! -f "\${CUT_JSON}" ]]; then
@@ -260,22 +254,50 @@ elif [[ ! -f "\${CUT_JSON}" ]]; then
 else
     echo ""
     echo "Running replay filter..."
-    "\${FILTER_CMD}" "\${MERGED}" -o "\${FILTERED}" -c "\${CUT_JSON}" -j "\${REPORT}"
-    LC_INPUT="\${FILTERED}"
+    if [[ "\${#RECON_INPUTS[@]}" -gt 1 ]]; then
+        FILTER_OUT="\${OUT_DIR}"
+    else
+        _BASE="\$(basename "\${RECON_INPUTS[0]}")"
+        FILTER_OUT="\${OUT_DIR}/\${_BASE%.root}_filter.root"
+    fi
+    "\${FILTER_CMD}" "\${RECON_INPUTS[@]}" -o "\${FILTER_OUT}" -c "\${CUT_JSON}" -j "\${REPORT}" -t "\${REPLAY_CORES}"
+    mapfile -t FILTER_ROOTS < <(find "\${OUT_DIR}" -maxdepth 1 -type f -name "prad_\${RUN_NUMBER}*_filter*.root" | sort)
+    if [[ "\${#FILTER_ROOTS[@]}" -gt 0 ]]; then
+        LC_INPUTS=("\${FILTER_ROOTS[@]}")
+    else
+        echo "ERROR: no filtered ROOT files found in \${OUT_DIR}; live_charge requires prad_\${RUN_NUMBER}*_filter*.root inputs."
+        exit 1
+    fi
 fi
 
 if [[ ! -x "\${LIVE_CHARGE_CMD}" ]]; then
     echo "WARNING: executable not found: \${LIVE_CHARGE_CMD}, skipping live charge."
 else
+    if [[ "\${#LC_INPUTS[@]}" -eq 0 ]]; then
+        echo "ERROR: live_charge requires filtered ROOT files, but none were selected."
+        exit 1
+    fi
     echo ""
     echo "Running live charge calculation..."
-    "\${LIVE_CHARGE_CMD}" "\${LC_INPUT}" -j "\${LC_JSON}"
+    "\${LIVE_CHARGE_CMD}" "\${LC_INPUTS[@]}" -j "\${LC_JSON}"
+fi
+
+if [[ ! -x "\${QUICK_CHECK_CMD}" ]]; then
+    echo "WARNING: executable not found: \${QUICK_CHECK_CMD}, skipping quick check."
+else
+    echo ""
+    echo "Running quick check..."
+    "\${QUICK_CHECK_CMD}" "\${RECON_INPUTS[@]}" -o "\${QC_OUTPUT}" -j "\${REPLAY_CORES}"
 fi
 
 echo ""
 echo "Replay/recon job finished."
-echo "Merged file: \${MERGED}"
+echo "Recon inputs: \${#RECON_INPUTS[@]}"
+echo "Output dir: \${OUT_DIR}"
+echo "Filter report: \${REPORT}"
+echo "Slow ROOT: \${SLOW_ROOT}"
 echo "Live charge JSON: \${LC_JSON}"
+echo "Quick check ROOT: \${QC_OUTPUT}"
 date
 EOF
 

@@ -1,6 +1,6 @@
 # submit_replay_recon.sh
 
-Submit one PRad-II replay/recon job to the JLab ifarm Slurm system.
+Submit one PRad-II replay pipeline job to the JLab ifarm Slurm system.
 
 This script is the batch-job version of `replay_recon.sh`. It keeps the same
 interactive style, but instead of running the full replay pipeline directly on
@@ -11,8 +11,14 @@ Pipeline:
 
 ```text
 cache check -> optional jcache staging -> sbatch
-    -> replay -> merge -> quick check -> filter -> live charge
+    -> replay recon -> filter -> live charge -> quick check
 ```
+
+The generated job keeps all products directly under
+`<OUTPUT_BASE>/prad_<RUN>/`.  `prad2ana_replay_recon` does grouped `hadd`
+merging internally by default, with 80 split ROOT files per merged recon
+ROOT.  The same CPU count is used for replay, filter, quick check, and Slurm
+`--cpus-per-task`.
 
 ---
 
@@ -118,14 +124,15 @@ Press Enter to accept the default value shown in brackets.
 | `Enter executable directory` | Directory containing `prad2ana_*` executables | `<PRAD2_SOFT>/build/bin` |
 | `Enter EVIO cache base directory` | Base directory for raw EVIO data | `/cache/clas12/rg-o/data` |
 | `Enter output base directory` | Base directory for all output files | `./` |
-| `Enter number of parallel jobs (-j)` | Replay thread count | `50` |
-| `Enter GEM zero suppression (-z)` | zlib compression level passed to replay | `5` |
+| `Enter number of parallel jobs (-j)` | Shared CPU count for `replay_recon -j`, `replay_filter -t`, `quick_check -j`, and Slurm `--cpus-per-task` | `50` |
+| `Enter GEM zero suppression (-z)` | GEM zero-suppression sigma threshold passed to replay | `5` |
 | `Enter max number of files to process (-f)` | Maximum number of EVIO sub-files to process | `10000` |
+| `Enter replay merge group size (-m, 0 disables)` | Number of split recon ROOT files per merged output | `80` |
 | `Cut JSON [default]` | Cut config for `prad2ana_replay_filter` | `<PRAD2_SOFT>/analysis/cuts/prad2_default.json` |
 | `Enter ROOT setup script` | Optional ROOT setup script to source inside the job | `none` |
-| `Enter Slurm account` | Slurm account | `halla` |
-| `Enter Slurm partition (or priority)` | Slurm partition | `production` |
-| `Enter Slurm time limit` | Job wall time | `24:00:00` |
+| `Enter Slurm account` | Slurm account | `hallb` |
+| `Enter Slurm partition (production or priority)` | Slurm partition | `production` |
+| `Enter Slurm time limit` | Job wall time | `12:00:00` |
 | `Enter Slurm mem-per-cpu MB` | Memory per CPU in MB | `2000` |
 
 All relative paths entered at the prompts are resolved relative to the directory
@@ -157,9 +164,10 @@ bash scripts/shell/submit_replay_recon.sh
 | `PRAD2_BIN` | Executable directory |
 | `CACHE_BASE` | Base directory for EVIO input data |
 | `OUTPUT_BASE` | Base directory for output files |
-| `REPLAY_CORES` | Replay thread count and Slurm `--cpus-per-task` |
-| `REPLAY_ZERO_SUPPRESS` | zlib compression level |
+| `REPLAY_CORES` | Shared CPU count for replay, filter, quick check, and Slurm `--cpus-per-task` |
+| `REPLAY_ZERO_SUPPRESS` | GEM zero-suppression sigma threshold |
 | `REPLAY_MAX_FILES` | Maximum number of EVIO sub-files |
+| `REPLAY_MERGE_FILES` | Number of split recon ROOT files per merged output; `0` disables merging |
 | `DEFAULT_CUTS` | Default replay filter cut JSON |
 | `ROOT_SETUP` | ROOT setup script sourced inside the Slurm job |
 | `SLURM_ACCOUNT` | Slurm account |
@@ -209,14 +217,16 @@ Expected outputs:
 | `replay_recon_<RUN>.sbatch` | Generated Slurm batch script |
 | `replay_recon_<RUN>-<JOBID>.out` | Slurm stdout |
 | `replay_recon_<RUN>-<JOBID>.err` | Slurm stderr |
-| `prad_<RUN>.00**_recon.root` | Per-sub-file ROOT output from replay, removed after successful merge |
-| `prad_<RUN>_recon.root` | Merged recon ROOT file |
-| `prad_<RUN>_quick_check.root` | Quick-check histograms, if produced by `prad2ana_quick_check` |
-| `prad_<RUN>_filtered.root` | Filtered physics events |
-| `prad_<RUN>_filter_report.json` | Replay filter report |
-| `prad_<RUN>_live_charge.json` | Live charge result |
+| `prad_<RUN>.evio.XXXXX_recon.root` | Per-split recon ROOT output from replay |
+| `prad_<RUN>_recon_000.root`, `prad_<RUN>_recon_001.root`, ... | Merged recon ROOT files, grouped by `REPLAY_MERGE_FILES` |
+| `prad_<RUN>_recon_000_filter.root`, `prad_<RUN>_recon_001_filter.root`, ... | Filtered ROOT files, one per recon input |
+| `prad_<RUN>_epics.root` | Run-level slow-control ROOT containing only `scalers`, `epics`, and `runinfo` |
+| `prad_<RUN>_filter_report.json` | Run-level replay filter report |
+| `prad_<RUN>_live_charge.json` | Live charge result from all filtered ROOT files |
+| `prad_<RUN>_quick_check.root` | Quick-check histograms from all recon ROOT files |
 
-The per-sub-file ROOT files are deleted only after `hadd` finishes successfully.
+If `REPLAY_MERGE_FILES=0`, the downstream filter and quick-check steps use the
+per-split `prad_<RUN>.evio.XXXXX_recon.root` files directly.
 
 ---
 
@@ -248,18 +258,17 @@ The submitted job runs these steps:
 
 ```text
 1. Optionally source ROOT_SETUP
-2. Check root and hadd
+2. Check root
 3. Check the cache input directory again
-4. Run prad2ana_replay_recon
-5. Merge sub-file ROOT outputs with hadd
-6. Remove sub-file ROOT outputs
-7. Run prad2ana_quick_check, if available
-8. Run prad2ana_replay_filter, if available and cut JSON exists
-9. Run prad2ana_live_charge, if available
+4. Run prad2ana_replay_recon with -j REPLAY_CORES and -m REPLAY_MERGE_FILES
+5. Select merged recon ROOTs, or per-split recon ROOTs when -m 0
+6. Run prad2ana_replay_filter on all selected recon ROOTs with -t REPLAY_CORES
+7. Run prad2ana_live_charge on all filtered ROOTs together
+8. Run prad2ana_quick_check on all selected recon ROOTs with -j REPLAY_CORES
 ```
 
-If the filter step is skipped, `live_charge` uses the merged recon file as its
-input. If the filter step succeeds, `live_charge` uses the filtered ROOT file.
+`live_charge` does not fall back to unfiltered recon files. It requires the
+filtered ROOT files produced by `prad2ana_replay_filter`.
 
 ---
 
@@ -277,12 +286,13 @@ Enter output base directory [./]: /volatile/halla/user/recon
 Enter number of parallel jobs (-j) [50]:
 Enter GEM zero suppression (-z) [5]:
 Enter max number of files to process (-f) [10000]:
+Enter replay merge group size (-m, 0 disables) [80]:
 Enter cut JSON file for replay_filter (...):
 Cut JSON [default]:
 Enter ROOT setup script, or 'none' to rely on submitted environment [none]:
-Enter Slurm account [halla]:
-Enter Slurm partition (or priority) [production]:
-Enter Slurm time limit [24:00:00]:
+Enter Slurm account [hallb]:
+Enter Slurm partition (production or priority) [production]:
+Enter Slurm time limit [12:00:00]:
 Enter Slurm mem-per-cpu MB [2000]:
 
 Checking input directory: /cache/clas12/rg-o/data/prad_024650
