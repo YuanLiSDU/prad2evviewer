@@ -66,6 +66,14 @@ bool inHyCal(double xmm, double ymm) {
         && (fabs(xmm) < module * 16. && fabs(ymm) < module * 16.);
 }
 
+const int Nbins = 33;
+const float binEdge[Nbins+1] = {
+    0.500, 0.550, 0.600, 0.650, 0.700, 0.750, 0.775, 0.800, 0.825, 0.850,
+    0.875, 0.900, 0.940, 0.975, 1.014, 1.057, 1.105, 1.157, 1.211, 1.270,
+    1.338, 1.417, 1.514, 1.634, 1.787, 2.000, 2.213, 2.492, 2.792, 3.092,
+    3.392, 3.692, 3.992, 4.292
+};
+
 struct QuickResult {
     std::unique_ptr<PhysicsTools> physics;
     std::unique_ptr<TH2F> hit_pos;
@@ -76,6 +84,19 @@ struct QuickResult {
     std::unique_ptr<TH2F> h2_energy_theta_ep_ee;
     MollerData mollers;
     Long64_t processed = 0;
+
+    std::unique_ptr<TH2F> h2_ep_hits;
+    std::unique_ptr<TH2F> h2_ee_hits;
+    std::unique_ptr<TH2F> h2_ep_E_angle;
+    std::unique_ptr<TH2F> h2_ee_E_angle;
+
+    std::unique_ptr<TH1F> h_ep_yield;
+    std::unique_ptr<TH1F> h_ee_yield;
+    std::unique_ptr<TH1F> h_ep_ee_ratio;
+
+    std::unique_ptr<TH1F> h_ee_center_x;
+    std::unique_ptr<TH1F> h_ee_center_y;
+    std::unique_ptr<TH1F> h_ee_vertex_z;
 };
 
 static void detach(TH1 *h)
@@ -99,12 +120,46 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
         "Total energy per event;E (MeV);Counts", 4000, 0, 4000);
     r->h2_energy_theta_ep_ee = std::make_unique<TH2F>("energy_vs_theta",
         "Energy vs Theta(1 cluster);Theta (deg);Energy (MeV)", 160, 0, 8, 7500, 0, 5000);
+    
+    r->h2_ep_hits = std::make_unique<TH2F>("ep_hits",
+        "EP Hit positions;X (mm);Y (mm)", 720, -360, 360, 720, -360, 360);
+    r->h2_ee_hits = std::make_unique<TH2F>("ee_hits",
+        "EE Hit positions;X (mm);Y (mm)", 720, -360, 360, 720, -360, 360);
+    r->h2_ep_E_angle = std::make_unique<TH2F>("ep_E_angle",
+        "EP Energy vs Angle;Theta (deg);Energy (MeV)", 160, 0, 8, 7500, 0, 5000);
+    r->h2_ee_E_angle = std::make_unique<TH2F>("ee_E_angle",
+        "EE Energy vs Angle;Theta (deg);Energy (MeV)", 160, 0, 8, 7500, 0, 5000);
+
+    r->h_ep_yield = std::make_unique<TH1F>("ep_yield",
+        "EP Yield;Scattering Angle (deg);Counts", Nbins, binEdge);
+    r->h_ee_yield = std::make_unique<TH1F>("ee_yield",
+        "EE Yield;Scattering Angle (deg);Counts", Nbins, binEdge);
+    r->h_ep_ee_ratio = std::make_unique<TH1F>("ep_ee_ratio",
+        "EP/EE Yield Ratio;Scattering Angle (deg);Counts", Nbins, binEdge);
+
+    r->h_ee_center_x = std::make_unique<TH1F>("ee_center_x",
+        "EE Center X;X (mm);Counts", 800, -20, 20);
+    r->h_ee_center_y = std::make_unique<TH1F>("ee_center_y",
+        "EE Center Y;Y (mm);Counts", 800, -20, 20);
+    r->h_ee_vertex_z = std::make_unique<TH1F>("ee_vertex_z",
+        "EE Vertex Z;Z (mm);Counts", 6000, -5000, 8000);
+
     detach(r->hit_pos.get());
     detach(r->h_1cl.get());
     detach(r->h_2cl.get());
     detach(r->h_all.get());
     detach(r->h_tot.get());
     detach(r->h2_energy_theta_ep_ee.get());
+    detach(r->h2_ep_hits.get());
+    detach(r->h2_ee_hits.get());
+    detach(r->h2_ep_E_angle.get());
+    detach(r->h2_ee_E_angle.get());
+    detach(r->h_ep_yield.get());
+    detach(r->h_ee_yield.get());
+    detach(r->h_ep_ee_ratio.get());
+    detach(r->h_ee_center_x.get());
+    detach(r->h_ee_center_y.get());
+    detach(r->h_ee_vertex_z.get());
     return r;
 }
 
@@ -168,16 +223,113 @@ static bool processFile(const std::string &path,
             out.h_2cl->Fill(ev.cl_energy[1]);
 
             float Epair = ev.cl_energy[0] + ev.cl_energy[1];
-            float sigma = Ebeam * 0.025f / std::sqrt(Ebeam / 1000.f);
+            float sigma = Ebeam * 0.035f / std::sqrt(Ebeam / 1000.f);
             if (std::abs(Epair - Ebeam) < 4. * sigma) {
                 MollerEvent mp(
                     {ev.cl_x[0], ev.cl_y[0], ev.cl_z[0], ev.cl_energy[0]},
                     {ev.cl_x[1], ev.cl_y[1], ev.cl_z[1], ev.cl_energy[1]});
                 physics.FillMollerPhiDiff(physics.GetMollerPhiDiff(mp));
-                if (fabs(physics.GetMollerPhiDiff(mp)) > 5.f) continue;
-                out.mollers.push_back(mp);
-                physics.Fill2armMollerPosHist(mp.first.x, mp.first.y);
-                physics.Fill2armMollerPosHist(mp.second.x, mp.second.y);
+            }
+        }
+
+        //loop over GEM matched results
+        std::vector<analysis::HCHit> moller_Hits_candidate;
+        for (int j = 0; j < ev.matchNum; j++) {
+            float x = ev.mHit_gx[j][1];
+            float y = ev.mHit_gy[j][1];
+            float z = ev.mHit_gz[j][1];
+            float E = ev.mHit_E[j];
+            //project to HyCal plane
+            float scale = ev.mHit_z[j] / z;
+            x *= scale;
+            y *= scale;
+            z *= scale;
+            float theta = std::atan(std::sqrt(x*x + y*y) / z) * 180.f / M_PI;
+
+            if(!inHyCal(x, y)) continue;
+
+            float expectE = physics.ExpectedEnergy(theta, Ebeam, "ep");
+            if (fabs(E - expectE) < 3.f * expectE * 0.035f / std::sqrt(E/1000.f)) {
+                out.h2_ep_hits->Fill(x, y);
+                out.h2_ep_E_angle->Fill(theta, E);
+                out.h_ep_yield->Fill(theta);
+            }
+
+            if (E > 60. && E < Ebeam - 0.035 * Ebeam / sqrt(Ebeam/1000.))
+                moller_Hits_candidate.push_back({x, y, z, E});
+        }
+
+        std::sort(moller_Hits_candidate.begin(), moller_Hits_candidate.end(),
+                  [](const analysis::HCHit &a, const analysis::HCHit &b){ return a.energy > b.energy; });
+
+        analysis::MollerData mollerData_event;
+        int nCand = moller_Hits_candidate.size();
+
+        for (int j = 0; j < nCand; j++) {
+            const auto &hit1 = moller_Hits_candidate[j];
+            float theta1 = std::atan2(std::sqrt(hit1.x*hit1.x + hit1.y*hit1.y), hit1.z)
+                         * 180.f / M_PI;
+            for (int k = j + 1; k < nCand; k++) {
+                const auto &hit2 = moller_Hits_candidate[k];
+                float theta2 = std::atan2(std::sqrt(hit2.x*hit2.x + hit2.y*hit2.y), hit2.z)
+                             * 180.f / M_PI;
+                MollerEvent mev(
+                    {hit1.x, hit1.y, hit1.z, hit1.energy},
+                    {hit2.x, hit2.y, hit2.z, hit2.energy});
+                if (!physics.isMoller_kinematic(theta1, hit1.energy,
+                                                theta2, hit2.energy,
+                                                Ebeam, 0.035f))
+                    continue;
+                if (fabs(physics.GetMollerPhiDiff(mev)) > 10.f) continue;
+                mollerData_event.push_back(mev);
+            }
+        }
+
+        if (mollerData_event.empty()) continue;
+
+        if (mollerData_event.size() > 1) {
+            auto getPt = [](const MollerEvent &mev) -> float {
+                float sin_t1 = std::sqrt(mev.first.x*mev.first.x + mev.first.y*mev.first.y)
+                             / std::sqrt(mev.first.z*mev.first.z + mev.first.x*mev.first.x + mev.first.y*mev.first.y);
+                float sin_t2 = std::sqrt(mev.second.x*mev.second.x + mev.second.y*mev.second.y)
+                             / std::sqrt(mev.second.z*mev.second.z + mev.second.x*mev.second.x + mev.second.y*mev.second.y);
+                return std::fabs(mev.first.E * sin_t1 - mev.second.E * sin_t2);
+            };
+            auto best = std::min_element(
+                mollerData_event.begin(), mollerData_event.end(),
+                [&](const MollerEvent &a, const MollerEvent &b) {
+                    return getPt(a) < getPt(b);
+                });
+            MollerEvent bestPair = *best;
+            mollerData_event.clear();
+            mollerData_event.push_back(bestPair);
+        }
+
+        MollerEvent &mev = mollerData_event.front();
+        out.mollers.push_back(mev);
+
+        float t1 = std::atan2(std::sqrt(mev.first.x*mev.first.x + mev.first.y*mev.first.y),
+                              mev.first.z) * 180.f / M_PI;
+        float t2 = std::atan2(std::sqrt(mev.second.x*mev.second.x + mev.second.y*mev.second.y),
+                              mev.second.z) * 180.f / M_PI;
+        out.h2_ee_hits->Fill(mev.first.x, mev.first.y);
+        out.h2_ee_hits->Fill(mev.second.x, mev.second.y);
+        out.h2_ee_E_angle->Fill(t1, mev.first.E);
+        out.h2_ee_E_angle->Fill(t2, mev.second.E);
+        out.h_ee_yield->Fill(t1);
+        out.h_ee_yield->Fill(t2);
+
+        float vertex = physics.GetMollerZdistance(mev, Ebeam);
+        out.h_ee_vertex_z->Fill(vertex);
+
+        if (out.mollers.size() > 1) {
+            auto center = physics.GetMollerCenter(out.mollers[out.mollers.size() - 2], mev);
+            out.h_ee_center_x->Fill(center[0]);
+            out.h_ee_center_y->Fill(center[1]);
+            if (out.mollers.size() > 2) {
+                auto center2 = physics.GetMollerCenter(out.mollers[out.mollers.size() - 3], mev);
+                out.h_ee_center_x->Fill(center2[0]);
+                out.h_ee_center_y->Fill(center2[1]);
             }
         }
     }
@@ -193,10 +345,18 @@ static void mergeResult(QuickResult &dst, const QuickResult &src, fdec::HyCalSys
     dst.h_all->Add(src.h_all.get());
     dst.h_tot->Add(src.h_tot.get());
     dst.h2_energy_theta_ep_ee->Add(src.h2_energy_theta_ep_ee.get());
+    dst.h2_ep_hits->Add(src.h2_ep_hits.get());
+    dst.h2_ee_hits->Add(src.h2_ee_hits.get());
+    dst.h2_ep_E_angle->Add(src.h2_ep_E_angle.get());
+    dst.h2_ee_E_angle->Add(src.h2_ee_E_angle.get());
+    dst.h_ep_yield->Add(src.h_ep_yield.get());
+    dst.h_ee_yield->Add(src.h_ee_yield.get());
+    dst.h_ee_center_x->Add(src.h_ee_center_x.get());
+    dst.h_ee_center_y->Add(src.h_ee_center_y.get());
+    dst.h_ee_vertex_z->Add(src.h_ee_vertex_z.get());
 
     dst.physics->GetEnergyVsModuleHist()->Add(src.physics->GetEnergyVsModuleHist());
     dst.physics->GetEnergyVsThetaHist()->Add(src.physics->GetEnergyVsThetaHist());
-    dst.physics->Get2armMollerPosHist()->Add(src.physics->Get2armMollerPosHist());
     dst.physics->GetMollerPhiDiffHist()->Add(src.physics->GetMollerPhiDiffHist());
     for (int i = 0; i < hycal.module_count(); ++i) {
         int module_id = hycal.module(i).id;
@@ -307,6 +467,11 @@ int main(int argc, char *argv[])
         mergeResult(*merged, *res, hycal);
         hycal_mollers.insert(hycal_mollers.end(), res->mollers.begin(), res->mollers.end());
     }
+    for (int i = 1; i <= merged->h_ep_ee_ratio->GetNbinsX(); i++) {
+        double ep = merged->h_ep_yield->GetBinContent(i);
+        double ee = merged->h_ee_yield->GetBinContent(i);
+        merged->h_ep_ee_ratio->SetBinContent(i, ee > 0. ? ep / ee : 0.);
+    }
     PhysicsTools &physics = *merged->physics;
     TH2F *hit_pos = merged->hit_pos.get();
     TH1F *h_1cl = merged->h_1cl.get();
@@ -320,41 +485,36 @@ int main(int argc, char *argv[])
         outName = makeDefaultOutput(root_files[0]);
     TFile outfile(outName, "RECREATE");
 
-    // --- Moller vertex analysis ---
-    for (size_t i = 0; i < hycal_mollers.size(); i++) {
-        physics.FillMollerZ(physics.GetMollerZdistance(hycal_mollers[i], Ebeam));
-        if (i >= 1) {
-            auto c = physics.GetMollerCenter(hycal_mollers[i-1], hycal_mollers[i]);
-            physics.FillMollerXY(c[0], c[1]);
-        }
-    }
-
-    float hycal_vertex_z = fitAndDraw(physics.GetMollerZHist(), "Poscalib_result/hycal_vertex_z", 100.);
-    float hycal_center_x = fitAndDraw(physics.GetMollerXHist(), "Poscalib_result/hycal_center_x", 2.);
-    float hycal_center_y = fitAndDraw(physics.GetMollerYHist(), "Poscalib_result/hycal_center_y", 2.);
+    float hycal_vertex_z = fitAndDraw(merged->h_ee_vertex_z.get(), "Poscalib_result/hycal_vertex_z", 100.);
+    float hycal_center_x = fitAndDraw(merged->h_ee_center_x.get(), "Poscalib_result/hycal_center_x", 2.);
+    float hycal_center_y = fitAndDraw(merged->h_ee_center_y.get(), "Poscalib_result/hycal_center_y", 2.);
 
     // --- write output ---
     outfile.cd();
     hit_pos->Write();
+
+    merged->h2_ep_hits->Write();
+    merged->h2_ee_hits->Write();
+    merged->h_ee_center_x->Write();
+    merged->h_ee_center_y->Write();
+    merged->h_ee_vertex_z->Write();
 
     outfile.mkdir("energy_plots"); outfile.cd("energy_plots");
     if (physics.GetEnergyVsModuleHist()) physics.GetEnergyVsModuleHist()->Write();
     if (physics.GetEnergyVsThetaHist())  physics.GetEnergyVsThetaHist()->Write();
     h_1cl->Write(); h_2cl->Write(); h_all->Write(); h_tot->Write();
     h2_energy_theta_ep_ee->Write();
+    merged->h2_ep_E_angle->Write();
+    merged->h2_ee_E_angle->Write();
 
     outfile.cd();
     outfile.mkdir("physics_yields"); outfile.cd("physics_yields");
-    auto h_ep = physics.GetEpYieldHist(physics.GetEnergyVsThetaHist(), Ebeam);
-    auto h_ee = physics.GetEeYieldHist(physics.GetEnergyVsThetaHist(), Ebeam);
-    auto h_ratio = physics.GetYieldRatioHist(h_ep.get(), h_ee.get());
-    if (h_ep) h_ep->Write();
-    if (h_ee) h_ee->Write();
-    if (h_ratio) h_ratio->Write();
+    merged->h_ep_yield->Write();
+    merged->h_ee_yield->Write();
+    merged->h_ep_ee_ratio->Write();
 
     outfile.cd();
     outfile.mkdir("moller_analysis"); outfile.cd("moller_analysis");
-    if (physics.Get2armMollerPosHist()) physics.Get2armMollerPosHist()->Write();
     if (physics.GetMollerPhiDiffHist()) physics.GetMollerPhiDiffHist()->Write();
     if (physics.GetMollerXHist()) physics.GetMollerXHist()->Write();
     if (physics.GetMollerYHist()) physics.GetMollerYHist()->Write();

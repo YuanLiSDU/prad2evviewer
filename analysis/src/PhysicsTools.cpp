@@ -335,11 +335,11 @@ bool PhysicsTools::isMoller_kinematic(float theta_deg1, float energy1, float the
 
     bool E_sum = false, E1_ok = false, E2_ok = false, phi_ok = false;
 
-    if(fabs(energy1 + energy2 - EBeam) < 4.f * resolution * EBeam / sqrt(EBeam/1000.f)) 
+    if(fabs(energy1 + energy2 - EBeam) < 5.f * resolution * EBeam / sqrt(EBeam/1000.f)) 
         E_sum = true;
-    if(fabs(energy1 - expectE1) < 3.f * expectE1 * resolution / sqrt(expectE1/1000.f)) 
+    if(fabs(energy1 - expectE1) < 3.5f * expectE1 * resolution / sqrt(expectE1/1000.f)) 
         E1_ok = true;
-    if(fabs(energy2 - expectE2) < 3.f * expectE2 * resolution / sqrt(expectE2/1000.f)) 
+    if(fabs(energy2 - expectE2) < 3.5f * expectE2 * resolution / sqrt(expectE2/1000.f)) 
         E2_ok = true;
 
     return E_sum && E1_ok && E2_ok;
