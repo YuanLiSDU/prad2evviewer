@@ -40,6 +40,9 @@ struct ClusterConfig {
     // position reconstruction
     float log_weight_thres   = 3.6f;      // W = max(0, thres + ln(E_i/E_tot))
 
+    // energy correction
+    bool  non_linear_corr    = true;      // apply per-module energy non-linearity correction
+
     // --- multi-pulse / timing coincidence ------------------------------------
     // Waveform data can produce more than one pulse per module per event.
     // When `seed_time_window > 0`, AddHit() may be called multiple times for

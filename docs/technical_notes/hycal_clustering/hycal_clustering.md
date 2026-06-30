@@ -526,6 +526,7 @@ All knobs live in `fdec::ClusterConfig`. Defaults match
 | `least_split` | 0.01 | fraction | Drop modules with sub-1 % normalised split fraction. |
 | `log_weight_thres` | 3.6 | — | $T$ in $w = \max(0,\; T + \ln(E_h / E_{\mathrm{tot}}))$. |
 | `seed_time_window` | $-1$ | ns | $W$ for the multi-pulse coincidence gate; $\le 0$ disables. |
+| `non_linear_corr`   | true | — | Apply per-module energy non-linearity correction. |
 
 `PipelineBuilder` reads the JSON `recon.hycal` block and applies
 overrides for any of the above. To enable the timing-coincidence
@@ -546,6 +547,7 @@ study tool output.
 | `nblocks` | `int` | Modules contributing to this cluster (post-split) |
 | `npos` | `int` | Modules used in the log-weighted position ($\le 9$) |
 | `flag` | `uint32_t` | Bitmask of layout + algorithm flags |
+| `linear_corr` | `float` | Linear energy correction applied to the cluster energy. |
 
 Useful flag bits (defined in `HyCalSystem.h`):
 

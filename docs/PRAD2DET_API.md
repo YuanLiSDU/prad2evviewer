@@ -119,6 +119,7 @@ Algorithm details: `docs/technical_notes/hycal_clustering/`.
 | `split_iter`        | 6 | shower-split fixed-point iterations |
 | `least_split`       | 0.01 | minimum split fraction |
 | `log_weight_thres`  | 3.6 | W = max(0, thres + ln(E_i / E_tot)) |
+| `non_linear_corr`   | true | apply per-module energy non-linearity correction |
 
 ### Per-event types
 

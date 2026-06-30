@@ -85,6 +85,7 @@ void apply_hycal_cluster_overrides(const json &j, fdec::ClusterConfig &cfg)
     if (j.contains("least_split"))        cfg.least_split        = j["least_split"];
     if (j.contains("log_weight_thres"))   cfg.log_weight_thres   = j["log_weight_thres"];
     if (j.contains("seed_time_window"))   cfg.seed_time_window   = j["seed_time_window"];
+    if (j.contains("non_linear_corr"))    cfg.non_linear_corr    = j["non_linear_corr"];
 }
 
 } // namespace
@@ -377,6 +378,7 @@ Pipeline PipelineBuilder::build()
             << "  min_ctr_E=" << out.hycal_cluster_cfg.min_center_energy
             << "  min_cl_E=" << out.hycal_cluster_cfg.min_cluster_energy
             << "  split_iter=" << out.hycal_cluster_cfg.split_iter
+            << "  nonlin=" << (out.hycal_cluster_cfg.non_linear_corr ? "on" : "off")
             << "  seed_t_win=" << out.hycal_cluster_cfg.seed_time_window << "ns"
             << (out.hycal_cluster_cfg.seed_time_window > 0.f ? " (gated)" : " (off)");
         LOG(oss.str());

@@ -12,6 +12,7 @@
         "min_cluster_energy": 50.0,
         "min_cluster_size":   1,
         "corner_conn":        false,
+        "non_linear_corr":    true,
         "split_iter":         6,
         "least_split":        0.01,
         "log_weight_thres":   3.6,

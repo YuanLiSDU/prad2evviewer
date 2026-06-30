@@ -439,13 +439,19 @@ ClusterHit HyCalCluster::reconstruct_pos(const ModuleCluster &cl) const
     result.flag      = cl.flag;
     result.linear_corr = 1.f;
 
-    //non-linearity correction: 
-    // 1./linear_corr = E_rec/E_exp = 1 + nl1*(E_rec-E_base)/1000 + nl2*((E_rec-E_base)/1000)^2
-    float cal_non_linear_1 = sys_.GetCalibNonLinearity1(center_mod.id);
-    float cal_non_linear_2 = sys_.GetCalibNonLinearity2(center_mod.id);
-    float cal_base_energy = sys_.GetCalibBaseEnergy(center_mod.id);
-    result.linear_corr = 1.f / (1.f + cal_non_linear_1 * (cl.energy - cal_base_energy) / 1000.f + 
-        cal_non_linear_2 * (cl.energy - cal_base_energy) * (cl.energy - cal_base_energy) / (1000.f * 1000.f));
+    if (config_.non_linear_corr) {
+        // 1/linear_corr = E_rec/E_exp
+        // = 1 + nl1*(E_rec-E_base)/1000 + nl2*((E_rec-E_base)/1000)^2
+        const float nl1 = sys_.GetCalibNonLinearity1(center_mod.id);
+        const float nl2 = sys_.GetCalibNonLinearity2(center_mod.id);
+        const float base_energy = sys_.GetCalibBaseEnergy(center_mod.id);
+        const float delta_gev = (cl.energy - base_energy) / 1000.f;
+        result.linear_corr = 1.f / (1.f + nl1 * delta_gev
+                                          + nl2 * delta_gev * delta_gev);
+        if (cl.energy > 3800.f || result.linear_corr < 0.7f || result.linear_corr > 1.3f)
+            result.linear_corr = 1.f;
+    }
+
     result.energy = cl.energy * result.linear_corr;
 
     if (wtot > 0.f) {
