@@ -106,7 +106,8 @@ bool MatchingTools::PreMatch(const analysis::HCHit &hycal,
 
     float match_range = matchRange_;
     if (energyDependent_ && hycal.energy > 0.f) {
-        match_range = matchSigma_ * 3.f / std::sqrt(hycal.energy / 1000.f); //assume 3mm resolution for hycal
+        match_range = matchSigma_ * (2.7924f / std::sqrt(hycal.energy / 1000.f)
+                                    -0.2709f / (hycal.energy / 1000.f) - 0.0295f );
     }
 
     if (squareSel_) {
