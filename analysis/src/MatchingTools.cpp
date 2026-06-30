@@ -104,10 +104,15 @@ bool MatchingTools::PreMatch(const analysis::HCHit &hycal,
     float dx = std::fabs(hycal.x - proj.x_proj);
     float dy = std::fabs(hycal.y - proj.y_proj);
 
+    float match_range = matchRange_;
+    if (energyDependent_ && hycal.energy > 0.f) {
+        match_range = matchSigma_ * 3.f / std::sqrt(hycal.energy / 1000.f); //assume 3mm resolution for hycal
+    }
+
     if (squareSel_) {
-        return (dx <= matchRange_) && (dy <= matchRange_);
+        return (dx <= match_range) && (dy <= match_range);
     } else {
-        return (dx * dx + dy * dy) <= matchRange_ * matchRange_;
+        return (dx * dx + dy * dy) <= match_range * match_range;
     }
 }
 

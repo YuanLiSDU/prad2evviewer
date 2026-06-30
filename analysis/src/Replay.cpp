@@ -1074,6 +1074,8 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
 
             matching.SetMatchRange(gRunConfig.matching_radius); // matching radius in mm, 15mm default
             matching.SetSquareSelection(gRunConfig.matching_use_square); // square/circular cut
+            matching.SetEnergyDependent(gRunConfig.matching_energy_dependent); // energy-dependent matching
+            matching.SetMatchSigma(gRunConfig.matching_sigma); // sigma for energy-dependent matching, overrid the constant match range
             std::vector<MatchHit> matched_hits = matching.Match(hc_hits, gem_hits[0], gem_hits[1], gem_hits[2], gem_hits[3]);
             std::vector<MatchHit_perChamber> matched_hits_chamber = matching.MatchPerChamber(hc_hits, gem_hits[0], gem_hits[1], gem_hits[2], gem_hits[3]); 
             

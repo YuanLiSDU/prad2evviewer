@@ -84,6 +84,8 @@ struct RunConfig {
     float hc_time_win_hi = 200.f;  // ns
     float matching_radius     = 15.f;
     bool  matching_use_square = true;
+    bool  matching_energy_dependent = true;
+    float matching_sigma = 5.f;
     // For gain correction: which run to use as reference for computing the correction factors.  If negative, use the latest run with gain factors available.
     std::string gain_data_dir = "";
     int gain_ref_run = 23915;
@@ -241,8 +243,10 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
         }
         if (c.contains("matching")) {
             const auto &m = c["matching"];
-            if (m.contains("radius"))         result.matching_radius     = m["radius"].get<float>();
-            if (m.contains("use_square_cut")) result.matching_use_square = m["use_square_cut"].get<bool>();
+            if (m.contains("radius"))           result.matching_radius           = m["radius"].get<float>();
+            if (m.contains("use_square_cut"))   result.matching_use_square       = m["use_square_cut"].get<bool>();
+            if (m.contains("energy_dependent")) result.matching_energy_dependent = m["energy_dependent"].get<bool>();
+            if (m.contains("sigma"))            result.matching_sigma            = m["sigma"].get<float>();
         }
         if (c.contains("gain_factor") && c["gain_factor"].is_object()) {
             const auto &gf = c["gain_factor"];

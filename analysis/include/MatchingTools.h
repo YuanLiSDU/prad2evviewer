@@ -88,10 +88,15 @@ public:
     // configuration setters
     void SetMatchRange(float range)    { matchRange_ = range; }
     void SetSquareSelection(bool sq)   { squareSel_ = sq; }
+    void SetEnergyDependent(bool ed)   { energyDependent_ = ed; }
+    void SetMatchSigma(float sigma)    { matchSigma_ = sigma; }
 
 private:
     float matchRange_ = 15.f;   // mm, spatial matching window
     bool  squareSel_  = true;   // true = square window, false = circular
+
+    float matchSigma_ = 1.f;   // mm, used for energy-dependent matching
+    bool  energyDependent_ = false;
 
     float ProjectionDistance(const analysis::HCHit &h, const analysis::GEMHit &g) const;
     float ProjectionDistance(const analysis::GEMHit &g1, const analysis::GEMHit &g2, float ref_z) const;
