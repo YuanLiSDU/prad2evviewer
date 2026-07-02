@@ -68,7 +68,7 @@ DEFAULT_CUTS="${DEFAULT_CUTS:-${PRAD2_SOFT}/analysis/cuts/prad2_default.json}"
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-hallb}"
 SLURM_PARTITION="${SLURM_PARTITION:-production}"
 SLURM_TIME="${SLURM_TIME:-12:00:00}"
-SLURM_MEM_PER_CPU="${SLURM_MEM_PER_CPU:-1000}"
+SLURM_MEM_PER_CPU="${SLURM_MEM_PER_CPU:-1500}"
 ROOT_SETUP="${ROOT_SETUP:-}"
 
 echo "Submit one PRad-II replay/recon Slurm job"
@@ -258,14 +258,22 @@ else
         FILTER_OUT="\${OUT_DIR}"
     else
         _BASE="\$(basename "\${RECON_INPUTS[0]}")"
-        FILTER_OUT="\${OUT_DIR}/\${_BASE%.root}_filter.root"
+        if [[ "\${_BASE}" =~ ^(.+)_recon_([^/]+)\.root$ ]]; then
+            FILTER_OUT="\${OUT_DIR}/\${BASH_REMATCH[1]}_filter_\${BASH_REMATCH[2]}.root"
+        elif [[ "\${_BASE}" =~ ^(.+)\.evio\.([0-9]+)_recon\.root$ ]]; then
+            FILTER_OUT="\${OUT_DIR}/\${BASH_REMATCH[1]}_filter_\${BASH_REMATCH[2]}.root"
+        elif [[ "\${_BASE}" =~ ^(.+)\.([0-9]+)_recon\.root$ ]]; then
+            FILTER_OUT="\${OUT_DIR}/\${BASH_REMATCH[1]}_filter_\${BASH_REMATCH[2]}.root"
+        else
+            FILTER_OUT="\${OUT_DIR}/\${_BASE%.root}_filter.root"
+        fi
     fi
     "\${FILTER_CMD}" "\${RECON_INPUTS[@]}" -o "\${FILTER_OUT}" -c "\${CUT_JSON}" -j "\${REPORT}" -t "\${REPLAY_CORES}"
-    mapfile -t FILTER_ROOTS < <(find "\${OUT_DIR}" -maxdepth 1 -type f -name "prad_\${RUN_NUMBER}*_filter*.root" | sort)
+    mapfile -t FILTER_ROOTS < <(find "\${OUT_DIR}" -maxdepth 1 -type f -name "prad_\${RUN_NUMBER}_filter*.root" | sort)
     if [[ "\${#FILTER_ROOTS[@]}" -gt 0 ]]; then
         LC_INPUTS=("\${FILTER_ROOTS[@]}")
     else
-        echo "ERROR: no filtered ROOT files found in \${OUT_DIR}; live_charge requires prad_\${RUN_NUMBER}*_filter*.root inputs."
+        echo "ERROR: no filtered ROOT files found in \${OUT_DIR}; live_charge requires prad_\${RUN_NUMBER}_filter*.root inputs."
         exit 1
     fi
 fi

@@ -181,7 +181,15 @@ else
             FILTER_OUT="${OUT_DIR}"
         else
             _BASE="$(basename "${RECON_INPUTS[0]}")"
-            FILTER_OUT="${OUT_DIR}/${_BASE%.root}_filter.root"
+            if [[ "${_BASE}" =~ ^(.+)_recon_([^/]+)\.root$ ]]; then
+                FILTER_OUT="${OUT_DIR}/${BASH_REMATCH[1]}_filter_${BASH_REMATCH[2]}.root"
+            elif [[ "${_BASE}" =~ ^(.+)\.evio\.([0-9]+)_recon\.root$ ]]; then
+                FILTER_OUT="${OUT_DIR}/${BASH_REMATCH[1]}_filter_${BASH_REMATCH[2]}.root"
+            elif [[ "${_BASE}" =~ ^(.+)\.([0-9]+)_recon\.root$ ]]; then
+                FILTER_OUT="${OUT_DIR}/${BASH_REMATCH[1]}_filter_${BASH_REMATCH[2]}.root"
+            else
+                FILTER_OUT="${OUT_DIR}/${_BASE%.root}_filter.root"
+            fi
         fi
         echo "Command: ${FILTER_CMD} ${RECON_INPUTS[*]} -o ${FILTER_OUT} -c ${CUT_JSON} -j ${REPORT} -t ${REPLAY_CORES}"
         echo ""
@@ -211,9 +219,9 @@ LIVE_CHARGE_CMD="${PRAD2_BIN}/prad2ana_live_charge"
 if [[ ! -x "${LIVE_CHARGE_CMD}" ]]; then
     echo "WARNING: executable not found: ${LIVE_CHARGE_CMD}, skipping live charge."
 else
-    mapfile -t LC_INPUTS < <(find "${OUT_DIR}" -maxdepth 1 -type f -name "prad_${RUN_NUMBER}*_filter*.root" | sort)
+    mapfile -t LC_INPUTS < <(find "${OUT_DIR}" -maxdepth 1 -type f -name "prad_${RUN_NUMBER}_filter*.root" | sort)
     if [[ "${#LC_INPUTS[@]}" -eq 0 ]]; then
-        echo "ERROR: no filtered ROOT files found in ${OUT_DIR}; live_charge requires prad_${RUN_NUMBER}*_filter*.root inputs."
+        echo "ERROR: no filtered ROOT files found in ${OUT_DIR}; live_charge requires prad_${RUN_NUMBER}_filter*.root inputs."
         exit 1
     fi
     LC_JSON="${OUT_DIR}/prad_${RUN_NUMBER}_live_charge.json"

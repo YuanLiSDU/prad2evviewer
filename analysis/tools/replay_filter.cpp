@@ -666,6 +666,43 @@ std::string filtered_output_path(const std::string &out_dir,
                                  const std::string &input_path,
                                  const std::string &label = "")
 {
+    auto p = std::filesystem::path(input_path);
+    const std::string name = p.filename().string();
+    const std::string marker = "_recon_";
+    const std::string ext = ".root";
+    const auto marker_pos = name.rfind(marker);
+    if (marker_pos != std::string::npos &&
+        name.size() > marker_pos + marker.size() + ext.size() &&
+        name.compare(name.size() - ext.size(), ext.size(), ext) == 0) {
+        const std::string index = name.substr(
+            marker_pos + marker.size(),
+            name.size() - marker_pos - marker.size() - ext.size());
+        const std::string output_name =
+            name.substr(0, marker_pos) + "_filter" +
+            (label.empty() ? std::string() : "_" + label) +
+            "_" + index + ext;
+        return (std::filesystem::path(out_dir) / output_name).string();
+    }
+
+    const std::string unmerged_suffix = "_recon.root";
+    if (name.size() > unmerged_suffix.size() &&
+        name.compare(name.size() - unmerged_suffix.size(),
+                     unmerged_suffix.size(), unmerged_suffix) == 0) {
+        const std::string stem = name.substr(0, name.size() - unmerged_suffix.size());
+        const auto index_pos = stem.rfind('.');
+        if (index_pos != std::string::npos && index_pos + 1 < stem.size()) {
+            std::string prefix = stem.substr(0, index_pos);
+            if (prefix.size() >= 5 &&
+                prefix.compare(prefix.size() - 5, 5, ".evio") == 0)
+                prefix.resize(prefix.size() - 5);
+            const std::string output_name =
+                prefix + "_filter" +
+                (label.empty() ? std::string() : "_" + label) +
+                "_" + stem.substr(index_pos + 1) + ext;
+            return (std::filesystem::path(out_dir) / output_name).string();
+        }
+    }
+
     std::string suffix = "_filter" + (label.empty() ? std::string() : "_" + label);
     return (std::filesystem::path(out_dir) / insert_before_root(input_path, suffix)).string();
 }
@@ -2094,7 +2131,7 @@ void usage(const char *prog)
         "and the full scaler/epics streams concatenated, plus a JSON report\n"
         "with per-(cut, slow-event) pass/fail status for chart plotting.\n"
         "With multiple inputs, -o is an output directory; one filtered ROOT\n"
-        "is written per input by inserting _filter before the final .root,\n"
+        "is written per input as prad_<run>_filter_<index>.root,\n"
         "plus prad_<run>_epics.root and one run-level JSON report.\n"
         "\n"
         "With a \"split\" block events are instead classified by a PV level\n"

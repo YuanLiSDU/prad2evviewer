@@ -88,7 +88,7 @@ All output files are written to `<OUTPUT_BASE>/prad_<RUN>/`:
 | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `prad_<RUN>.XXXXX_recon.root`                                               | Per-split recon ROOT output from replay                                      |
 | `prad_<RUN>_recon_000.root`, `prad_<RUN>_recon_001.root`, ...               | Merged recon ROOT files, grouped by`REPLAY_MERGE_FILES`                      |
-| `prad_<RUN>_recon_000_filter.root`, `prad_<RUN>_recon_001_filter.root`, ... | Filtered ROOT files, one per recon input                                     |
+| `prad_<RUN>_filter_000.root`, `prad_<RUN>_filter_001.root`, ... | Filtered ROOT files, one per recon input                                     |
 | `prad_<RUN>_epics.root`                                                     | Run-level slow-control ROOT containing only`scalers`, `epics`, and `runinfo` |
 | `prad_<RUN>_filter_report.json`                                             | Run-level per-checkpoint filter verdict from`replay_filter`                  |
 | `prad_<RUN>_live_charge.json`                                               | Live charge result in nC from all filtered ROOT files                        |

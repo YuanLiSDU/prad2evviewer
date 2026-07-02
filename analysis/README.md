@@ -99,7 +99,7 @@ run-level slow-control file, `prad_<run>_epics.root`, containing only
 `scalers`, `epics`, and `runinfo`, plus one run-level JSON report.
 For multi-input filtering, a typical run directory therefore contains
 `prad_<run>_recon_<batch>.root`, matching
-`prad_<run>_recon_<batch>_filter.root`, `prad_<run>_epics.root`, and
+`prad_<run>_filter_<batch>.root`, `prad_<run>_epics.root`, and
 `prad_<run>_filter_report.json` side by side. `-t` controls the number
 of parallel output workers.
 

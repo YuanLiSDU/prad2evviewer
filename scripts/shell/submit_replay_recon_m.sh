@@ -78,7 +78,7 @@ DEFAULT_CUTS="${DEFAULT_CUTS:-${PRAD2_SOFT}/analysis/cuts/prad2_default.json}"
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-hallb}"
 SLURM_PARTITION="${SLURM_PARTITION:-production}"
 SLURM_TIME="${SLURM_TIME:-12:00:00}"
-SLURM_MEM_PER_CPU="${SLURM_MEM_PER_CPU:-1000}"
+SLURM_MEM_PER_CPU="${SLURM_MEM_PER_CPU:-1500}"
 ROOT_SETUP="${ROOT_SETUP:-}"
 
 echo "Submit multiple PRad-II replay/recon Slurm jobs"

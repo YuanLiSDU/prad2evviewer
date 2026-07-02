@@ -133,7 +133,7 @@ Press Enter to accept the default value shown in brackets.
 | `Enter Slurm account` | Slurm account | `hallb` |
 | `Enter Slurm partition (production or priority)` | Slurm partition | `production` |
 | `Enter Slurm time limit` | Job wall time | `12:00:00` |
-| `Enter Slurm mem-per-cpu MB` | Memory per CPU in MB | `2000` |
+| `Enter Slurm mem-per-cpu MB` | Memory per CPU in MB | `1500` |
 
 All relative paths entered at the prompts are resolved relative to the directory
 where `submit_replay_recon.sh` is launched.
@@ -219,7 +219,7 @@ Expected outputs:
 | `replay_recon_<RUN>-<JOBID>.err` | Slurm stderr |
 | `prad_<RUN>.evio.XXXXX_recon.root` | Per-split recon ROOT output from replay |
 | `prad_<RUN>_recon_000.root`, `prad_<RUN>_recon_001.root`, ... | Merged recon ROOT files, grouped by `REPLAY_MERGE_FILES` |
-| `prad_<RUN>_recon_000_filter.root`, `prad_<RUN>_recon_001_filter.root`, ... | Filtered ROOT files, one per recon input |
+| `prad_<RUN>_filter_000.root`, `prad_<RUN>_filter_001.root`, ... | Filtered ROOT files, one per recon input |
 | `prad_<RUN>_epics.root` | Run-level slow-control ROOT containing only `scalers`, `epics`, and `runinfo` |
 | `prad_<RUN>_filter_report.json` | Run-level replay filter report |
 | `prad_<RUN>_live_charge.json` | Live charge result from all filtered ROOT files |
@@ -293,7 +293,7 @@ Enter ROOT setup script, or 'none' to rely on submitted environment [none]:
 Enter Slurm account [hallb]:
 Enter Slurm partition (production or priority) [production]:
 Enter Slurm time limit [12:00:00]:
-Enter Slurm mem-per-cpu MB [2000]:
+Enter Slurm mem-per-cpu MB [1500]:
 
 Checking input directory: /cache/clas12/rg-o/data/prad_024650
 
