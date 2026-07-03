@@ -236,15 +236,15 @@ int main(int argc, char *argv[])
                     }
                 }
 
+                bool trig_lms      = (event->info.trigger_bits & prad2::TBIT_lms)   != 0;
+                bool trig_alpha    = (event->info.trigger_bits & prad2::TBIT_alpha) != 0;
+
                 // Classify by channel count (trigger_bits unreliable):
                 //   LMS flash illuminates all ~1735 channels -> nch > 1000
                 //   Alpha source fires only a few crystals  -> 1 <= nch < 50
-                const bool is_lms   = (nch > 1000);
-                const bool is_alpha = (nch >= 1 && nch < 50);
-                if (!is_lms && !is_alpha) { ++total; continue; }
-
-                if (is_lms)   ++n_lms_ev;
-                if (is_alpha) ++n_alpha_ev;
+                const bool is_lms   = (nch > 1000) && trig_lms;
+                const bool is_alpha = (nch >= 1 && nch < 50) && trig_alpha;
+                if (!is_lms && !is_alpha) continue;
 
                 // ── Pass 2: decode waveforms, fill histograms ─────────────────
                 for (int r = 0; r < event->nrocs; ++r) {

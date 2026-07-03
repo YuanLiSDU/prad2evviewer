@@ -1245,6 +1245,10 @@ bool Replay::Process_LMSgainFactor(const std::string &input_evio, const std::str
             ev->trigger_bits      = event->info.trigger_bits;
             ev->timestamp    = event->info.timestamp;
 
+            bool trig_lms = (ev->trigger_bits & prad2::TBIT_lms) != 0;
+            bool trig_alpha = (ev->trigger_bits & prad2::TBIT_alpha) != 0;
+            if (!trig_lms && !trig_alpha) continue;
+
             // Decode FADC250 data — single pass over all channels (HyCal +
             // Veto + LMS).  Type dispatch comes from hycal_map.json's "t"
             // field, not module-name prefix; module_type[nch] records the
@@ -1292,8 +1296,8 @@ bool Replay::Process_LMSgainFactor(const std::string &input_evio, const std::str
             //calculate gain correction factors for W modules and fill the gain tree
             //Because the LMS and alpha trigger_bits can not believe, 
             // we need to use "nch" to seperate the LMS and alpha events
-            bool is_lms = ((ev->trigger_bits & prad2::TBIT_lms) != 0 || ev->nch > 1000);
-            bool is_alpha = ((ev->trigger_bits & prad2::TBIT_alpha) != 0 && ev->nch < 50);
+            bool is_lms = (trig_lms && ev->nch > 1000);
+            bool is_alpha = (trig_alpha && ev->nch < 50);
             
             if(is_lms) ev->event_type = 0; // LMS event
             if(is_alpha) ev->event_type = 1; // alpha event
