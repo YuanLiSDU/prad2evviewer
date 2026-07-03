@@ -574,6 +574,7 @@ void AppState::init(const std::string &db_dir,
     if (mcfg.contains("physics")) {
         auto &ph = mcfg["physics"];
         physics_trigger.parse(ph, trigger_bits_def);
+        moller_trigger = physics_trigger;  // default: inherit the physics filter
         if (ph.contains("beam_energy")) {
             auto &be = ph["beam_energy"];
             if (be.contains("epics_channel")) beam_energy_epics_channel = be["epics_channel"];
@@ -590,6 +591,11 @@ void AppState::init(const std::string &db_dir,
         }
         if (ph.contains("moller")) {
             auto &ml = ph["moller"];
+            // Own trigger gate when configured (X17: 2-cluster trigger).
+            // Both masks come from this section then — no mixing with the
+            // inherited physics filter.
+            if (ml.contains("accept_trigger_bits") || ml.contains("reject_trigger_bits"))
+                moller_trigger.parse(ml, trigger_bits_def);
             if (ml.contains("energy_tolerance")) moller_energy_tol = ml["energy_tolerance"];
             if (ml.contains("angle_min"))        moller_angle_min  = ml["angle_min"];
             if (ml.contains("angle_max"))        moller_angle_max  = ml["angle_max"];
@@ -620,7 +626,8 @@ void AppState::init(const std::string &db_dir,
             }
         }
         std::cerr << "Physics   : " << physics_trigger
-                  << " Moller: tol=" << moller_energy_tol
+                  << " Moller: " << moller_trigger
+                  << " tol=" << moller_energy_tol
                   << " angle=[" << moller_angle_min << "," << moller_angle_max << "]"
                   << " HyCalXY: Ncl=" << hxy_n_clusters
                   << " E>=" << hxy_energy_frac_min << "*Eb"

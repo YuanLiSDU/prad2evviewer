@@ -341,6 +341,11 @@ struct AppState {
     TriggerFilter physics_trigger;
 
     // Møller selection config
+    // Møller monitor has its own trigger gate: X17 running takes the Møller
+    // sample from the 2-cluster trigger, while physics_trigger stays wide for
+    // the other physics histograms.  Inherits physics_trigger when the
+    // physics.moller config section has no accept/reject keys (PRad-II runs).
+    TriggerFilter moller_trigger;
     float moller_energy_tol = 0.1f;     // energy sum within this fraction of beam_energy
     float moller_angle_min  = 1.0f;     // deg — require one cluster in this range
     float moller_angle_max  = 1.2f;     // deg

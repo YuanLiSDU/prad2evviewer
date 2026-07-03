@@ -169,6 +169,13 @@
             "energy_step": 20.0
         },
         "moller": {
+            "// Trigger gate for the Møller monitor only — the other physics": "",
+            "// plots keep the accept list above.  X17 production triggers are": "",
+            "// mostly 2-/3-cluster, and the Møller sample is taken from the": "",
+            "// 2-cluster trigger (SSP2).  Remove both keys to inherit the": "",
+            "// physics filter (PRad-II raw-sum running).": "",
+            "accept_trigger_bits": ["SSP2"],
+            "reject_trigger_bits": ["LMS", "Alpha", "Pulser"],
             "energy_tolerance": 0.1,
             "angle_min": 1.0,
             "angle_max": 1.2,

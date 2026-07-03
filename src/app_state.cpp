@@ -716,13 +716,20 @@ void AppState::processEvent(fdec::EventData &event,
         cluster_events_processed++;
 
         bool physics_accept = physics_trigger(tb);
-        if (physics_accept) {
+        bool moller_accept  = moller_trigger(tb);
+        if (physics_accept || moller_accept) {
             float Eb = beam_energy.load();
-            for (size_t i = 0; i < reco_hits.size(); ++i) {
-                energy_angle_hist.fill(cinfo[i].theta, reco_hits[i].energy,
-                    ea_angle_min, ea_angle_step, ea_energy_min, ea_energy_step);
+            if (physics_accept) {
+                for (size_t i = 0; i < reco_hits.size(); ++i) {
+                    energy_angle_hist.fill(cinfo[i].theta, reco_hits[i].energy,
+                        ea_angle_min, ea_angle_step, ea_energy_min, ea_energy_step);
+                }
             }
-            if (reco_hits.size() == 2 && Eb > 0) {
+            // Møller monitor — own trigger gate (physics.moller in
+            // monitor_config.json): X17 takes the Møller sample from the
+            // 2-cluster trigger; PRad-II raw-sum runs inherit the physics
+            // filter above.
+            if (moller_accept && reco_hits.size() == 2 && Eb > 0) {
                 float esum = reco_hits[0].energy + reco_hits[1].energy;
                 bool energy_ok = std::abs(esum - Eb) < moller_energy_tol * Eb;
                 bool angle_ok = false;
@@ -740,7 +747,7 @@ void AppState::processEvent(fdec::EventData &event,
             // HyCal cluster-hit XY: single-cluster ep-elastic candidates.
             // Same gate is reused (when configured) for GEM↔HyCal residuals.
             bool ep_cand = false;
-            if ((int)reco_hits.size() == hxy_n_clusters && Eb > 0) {
+            if (physics_accept && (int)reco_hits.size() == hxy_n_clusters && Eb > 0) {
                 const auto &cl = reco_hits[0];
                 bool nb_ok = cl.nblocks >= hxy_nblocks_min && cl.nblocks <= hxy_nblocks_max;
                 bool e_ok  = cl.energy  >= hxy_energy_frac_min * Eb;
@@ -756,7 +763,8 @@ void AppState::processEvent(fdec::EventData &event,
             // multi-cluster events it's the leading reconstructed hit.  The
             // residual lives at the HyCal plane, so σ_GEM is projected through
             // the target onto that plane: σ_total² = σ_HC(E)² + (σ_GEM·z_hc/z_gem)².
-            if (gem_enabled && (ep_cand || !gem_match_require_ep) && !reco_hits.empty()) {
+            if (physics_accept && gem_enabled
+                && (ep_cand || !gem_match_require_ep) && !reco_hits.empty()) {
                 const float ref_x = reco_hits[0].x, ref_y = reco_hits[0].y;
                 const float sigma_hc = hycal.PositionResolution(reco_hits[0].energy);
                 const float z_hc = cinfo[0].lz;
@@ -789,7 +797,7 @@ void AppState::processEvent(fdec::EventData &event,
             // GEM tracking efficiency — per HyCal cluster, no target assumption.
             // Builds per-detector lab-frame hit lists once and runs Pass A / B
             // for each cluster passing min_cluster_energy.
-            if (gem_enabled && !reco_hits.empty()) {
+            if (physics_accept && gem_enabled && !reco_hits.empty()) {
                 const int n_gem = std::min<int>(gem_sys.GetNDetectors(),
                                                 (int)gem_transforms.size());
                 std::vector<std::vector<LabHit>> hits_by_det(n_gem);
@@ -821,6 +829,7 @@ void AppState::processReconEvent(const ReconEventData &recon)
     uint32_t tb = recon.trigger_bits;
     bool do_cluster = cluster_trigger(tb);
     bool do_physics = physics_trigger(tb);
+    bool do_moller  = moller_trigger(tb);
 
     std::lock_guard<std::mutex> lk(data_mtx);
     events_processed++;
@@ -856,7 +865,7 @@ void AppState::processReconEvent(const ReconEventData &recon)
         cluster_events_processed++;
     }
 
-    if (do_physics && !recon.clusters.empty()) {
+    if ((do_physics || do_moller) && !recon.clusters.empty()) {
         struct CI { float lx, ly, lz, theta; };
         std::vector<CI> cinfo(recon.clusters.size());
         for (size_t i = 0; i < recon.clusters.size(); ++i) {
@@ -869,12 +878,15 @@ void AppState::processReconEvent(const ReconEventData &recon)
             float r = std::sqrt(dx*dx + dy*dy);
             ci.theta = std::atan2(r, dz) * (180.f / 3.14159265f);
         }
-        for (size_t i = 0; i < recon.clusters.size(); ++i)
-            energy_angle_hist.fill(cinfo[i].theta, recon.clusters[i].energy,
-                ea_angle_min, ea_angle_step, ea_energy_min, ea_energy_step);
+        if (do_physics) {
+            for (size_t i = 0; i < recon.clusters.size(); ++i)
+                energy_angle_hist.fill(cinfo[i].theta, recon.clusters[i].energy,
+                    ea_angle_min, ea_angle_step, ea_energy_min, ea_energy_step);
+        }
 
         float Eb = beam_energy.load();
-        if (recon.clusters.size() == 2 && Eb > 0) {
+        // Møller monitor — own trigger gate, same as the EVIO path above.
+        if (do_moller && recon.clusters.size() == 2 && Eb > 0) {
             float esum = recon.clusters[0].energy + recon.clusters[1].energy;
             bool energy_ok = std::abs(esum - Eb) < moller_energy_tol * Eb;
             bool angle_ok = false;
@@ -891,7 +903,7 @@ void AppState::processReconEvent(const ReconEventData &recon)
         }
         // HyCal cluster-hit XY: single-cluster ep-elastic candidates.
         bool ep_cand = false;
-        if ((int)recon.clusters.size() == hxy_n_clusters && Eb > 0) {
+        if (do_physics && (int)recon.clusters.size() == hxy_n_clusters && Eb > 0) {
             const auto &cl = recon.clusters[0];
             bool nb_ok = cl.nblocks >= hxy_nblocks_min && cl.nblocks <= hxy_nblocks_max;
             bool e_ok  = cl.energy  >= hxy_energy_frac_min * Eb;
@@ -906,7 +918,8 @@ void AppState::processReconEvent(const ReconEventData &recon)
         // which carry detector-local x,y just like the live gem_sys hits).
         // Same parametric cut as the live path:
         //   σ_total² = σ_HC(E)² + (σ_GEM·z_hc/z_gem)²,  cut = nsigma · σ_total.
-        if (gem_enabled && (ep_cand || !gem_match_require_ep) && !recon.clusters.empty()) {
+        if (do_physics && gem_enabled
+            && (ep_cand || !gem_match_require_ep) && !recon.clusters.empty()) {
             const float ref_x = recon.clusters[0].x, ref_y = recon.clusters[0].y;
             const float sigma_hc = hycal.PositionResolution(recon.clusters[0].energy);
             const float z_hc = cinfo[0].lz;
@@ -936,7 +949,7 @@ void AppState::processReconEvent(const ReconEventData &recon)
             gem_match_events++;
         }
         // GEM tracking efficiency (recon path mirrors the live-data path).
-        if (gem_enabled && !recon.clusters.empty()) {
+        if (do_physics && gem_enabled && !recon.clusters.empty()) {
             const int n_gem = std::min<int>(gem_sys.GetNDetectors(),
                                             (int)gem_transforms.size());
             std::vector<std::vector<LabHit>> hits_by_det(n_gem);

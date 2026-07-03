@@ -89,7 +89,7 @@ Large payloads are gzipped on demand when the client advertises `Accept-Encoding
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/physics/energy_angle` | Energy vs. angle distribution |
-| GET | `/api/physics/moller` | Moller scattering analysis |
+| GET | `/api/physics/moller` | Moller scattering analysis. Gated by its own trigger filter (`physics.moller.accept/reject_trigger_bits` in monitor_config.json — X17: 2-cluster trigger; inherits the `physics` filter when unset). Response carries the active masks in `trigger` + `trigger_accept_names` |
 | GET | `/api/physics/hycal_xy` | Single-cluster HyCal hit map |
 
 ## Elog

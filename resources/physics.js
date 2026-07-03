@@ -111,7 +111,17 @@ function plotMollerXY(){
 
     const cuts=d.cuts||{};
     const fmtA=v=>v!=null?v.toFixed(2):'?';
-    const cutTxt=`θ∈[${fmtA(cuts.angle_min)},${fmtA(cuts.angle_max)}]° Esum±${((cuts.energy_tolerance||0.1)*100).toFixed(0)}%`;
+    // Trigger tag: which trigger stream feeds this monitor (X17 runs take
+    // Møllers from the 2-cluster trigger).  Resolve the accept mask against
+    // triggerBitsDef for the display labels; fall back to server-sent names.
+    // accept==0 (accept-all) shows no tag.
+    const acc=(d.trigger&&d.trigger.trigger_accept)||0;
+    let trigNames=[];
+    if(acc && typeof triggerBitsDef!=='undefined' && triggerBitsDef.length)
+        trigNames=triggerBitsDef.filter(t=>acc&(1<<t.bit)).map(t=>t.label||t.name);
+    else if(d.trigger_accept_names) trigNames=d.trigger_accept_names;
+    const trigTxt=trigNames.length?`[${trigNames.join('+')}] `:'';
+    const cutTxt=`${trigTxt}θ∈[${fmtA(cuts.angle_min)},${fmtA(cuts.angle_max)}]° Esum±${((cuts.energy_tolerance||0.1)*100).toFixed(0)}%`;
 
     // θ ring overlay: convert the moller angle window into HyCal-plane radii
     // via r = dz · tan(θ), centered at (target_x, target_y).  dz is the

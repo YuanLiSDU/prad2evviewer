@@ -88,6 +88,8 @@ json AppState::apiMoller() const
             {"total_events", cluster_events_processed.load()},
             {"target",  {target_x, target_y, target_z}},
             {"hycal_z", hycal_transform.z},
+            {"trigger", moller_trigger.toJson()},
+            {"trigger_accept_names", bitsMaskToNames(moller_trigger.accept, trigger_bits_def)},
             {"cuts", {{"energy_tolerance", moller_energy_tol},
                       {"angle_min", moller_angle_min}, {"angle_max", moller_angle_max}}}};
 }
@@ -689,6 +691,7 @@ void AppState::fillConfigJson(json &cfg) const
         {"cluster", cluster_trigger.toJson()},
         {"lms",     lms_trigger.toJson()},
         {"physics", physics_trigger.toJson()},
+        {"moller",  moller_trigger.toJson()},
     };
     cfg["cluster_hist"] = {{"min", cl_hist_min}, {"max", cl_hist_max}, {"step", cl_hist_step}};
     cfg["nclusters_hist"] = {{"min", nclusters_hist_min}, {"max", nclusters_hist_max}, {"step", nclusters_hist_step}};
@@ -754,6 +757,7 @@ void AppState::fillConfigJson(json &cfg) const
             {"energy_min", ea_energy_min}, {"energy_max", ea_energy_max}, {"energy_step", ea_energy_step},
         }},
         {"moller", {
+            {"trigger", moller_trigger.toJson()},
             {"energy_tolerance", moller_energy_tol},
             {"angle_min", moller_angle_min}, {"angle_max", moller_angle_max},
         }},
