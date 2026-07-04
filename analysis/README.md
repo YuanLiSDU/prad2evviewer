@@ -67,13 +67,21 @@ the offline reconstruction matches what the live monitor produces.
 prad2ana_replay_recon <evio_or_dir> [more...] -o <output_dir> \
     [-f max_files] [-n max_events] [-j num_threads] \
     [-c daq_config.json] [-d hycal_map.json] \
-    [-g gem_pedestal.json] [-z zerosup_threshold] [-m merge_files] [-p]
+    [-g gem_pedestal.json] [-z zerosup_threshold] [-m merge_files] \
+    [-prad1 | -x17]
 ```
 
-`-p` here selects **PRad-I data format** (no GEM, ADC1881M Fastbus
-pedestals) — different semantics from the same flag on
-`replay_rawdata`.  `-g` overrides the GEM pedestal file from
-`runinfo`; `-z` overrides the zero-suppression sigma threshold. `-m`
+`-prad1` selects **PRad-I data format** (no GEM, ADC1881M Fastbus
+pedestals). `-x17` selects the X17 reconstruction path. The two modes
+are mutually exclusive.
+
+X17 reconstruction accepts the 1-, 2-, and 3-cluster trigger bits plus
+LMS and Alpha events. All 1-/2-cluster events are retained; for blind
+analysis, a 3-cluster event is retained only when `event_num % 10 == 8`
+(a deterministic 10% sample).
+
+`-g` overrides the GEM pedestal file from `runinfo`; `-z` overrides the
+zero-suppression sigma threshold. `-m`
 sets how many split `_recon.root` files go into each merged `hadd`
 output; the default is 80, and `-m 0` leaves only the per-split files.
 

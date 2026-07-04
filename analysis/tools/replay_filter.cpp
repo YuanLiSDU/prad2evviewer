@@ -1409,7 +1409,7 @@ int run(const std::vector<std::string> &input_files,
                 prad2::ReconEventData ev;
                 out->cd();
                 TTree *out_ev = new TTree("recon", "PRad2 filtered replay (recon)");
-                prad2::SetReconWriteBranches(out_ev, ev);
+                prad2::SetReconWriteBranches(out_ev, ev, false); // not x17_mode
                 std::unique_ptr<TFile> f(TFile::Open(file_info[fi].path.c_str(), "READ"));
                 TTree *t = f ? dynamic_cast<TTree *>(f->Get("recon")) : nullptr;
                 if (t) {
@@ -1702,7 +1702,7 @@ int run(const std::vector<std::string> &input_files,
         prad2::ReconEventData ev;
         out->cd();
         TTree *out_ev = new TTree("recon", "PRad2 filtered replay (recon)");
-        prad2::SetReconWriteBranches(out_ev, ev);
+        prad2::SetReconWriteBranches(out_ev, ev, false); // not x17_mode
 
         for (const auto &path : input_files) {
             std::unique_ptr<TFile> f(TFile::Open(path.c_str(), "READ"));

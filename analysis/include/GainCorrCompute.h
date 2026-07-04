@@ -9,6 +9,7 @@
 
 #include "gain_factor.h"
 
+#include <cstdint>
 #include <map>
 #include <set>
 #include <string>
@@ -31,6 +32,7 @@ struct GainBatch {
     int   n_lms_events     = 0;
     int   n_alpha_events   = 0;
     int   ref_run          = 0;
+    uint32_t unix_time     = 0;  // absolute Unix seconds at batch midpoint
 
     float refPMT_ratio       [kGainNLMS]            = {};
     float gain_W             [kGainNW][kGainNLMS]   = {};

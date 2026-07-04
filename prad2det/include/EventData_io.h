@@ -240,7 +240,7 @@ inline RawReadStatus SetRawReadBranches(TTree *tree, RawEventData &ev)
 // ─────────────────────────────────────────────────────────────────────────
 // Recon tree — write
 // ─────────────────────────────────────────────────────────────────────────
-inline void SetReconWriteBranches(TTree *tree, ReconEventData &ev)
+inline void SetReconWriteBranches(TTree *tree, ReconEventData &ev, bool x17_mode)
 {
     tree->Branch("event_num",    &ev.event_num,    "event_num/I");
     tree->Branch("trigger_type", &ev.trigger_type, "trigger_type/b");
@@ -293,15 +293,17 @@ inline void SetReconWriteBranches(TTree *tree, ReconEventData &ev)
     tree->Branch("gem_y_mTbin",  ev.gem_y_mTbin,   "gem_y_mTbin[n_gem_hits]/b");
 
     // Veto + LMS soft-peak summaries.
-    tree->Branch("veto_nch",         &ev.veto_nch,         "veto_nch/I");
-    tree->Branch("veto_id",          ev.veto_id,           "veto_id[veto_nch]/b");
-    tree->Branch("veto_npeaks",      ev.veto_npeaks,       "veto_npeaks[veto_nch]/I");
-    tree->Branch("veto_peak_time",   ev.veto_peak_time,
-                 Form("veto_peak_time[veto_nch][%d]/F",     fdec::MAX_PEAKS));
-    tree->Branch("veto_peak_height", ev.veto_peak_height,
-                 Form("veto_peak_height[veto_nch][%d]/F",   fdec::MAX_PEAKS));
-    tree->Branch("veto_peak_integral", ev.veto_peak_integral,
-                 Form("veto_peak_integral[veto_nch][%d]/F", fdec::MAX_PEAKS));
+    if(!x17_mode) {
+        tree->Branch("veto_nch",         &ev.veto_nch,         "veto_nch/I");
+        tree->Branch("veto_id",          ev.veto_id,           "veto_id[veto_nch]/b");
+        tree->Branch("veto_npeaks",      ev.veto_npeaks,       "veto_npeaks[veto_nch]/I");
+        tree->Branch("veto_peak_time",   ev.veto_peak_time,
+                    Form("veto_peak_time[veto_nch][%d]/F",     fdec::MAX_PEAKS));
+        tree->Branch("veto_peak_height", ev.veto_peak_height,
+                    Form("veto_peak_height[veto_nch][%d]/F",   fdec::MAX_PEAKS));
+        tree->Branch("veto_peak_integral", ev.veto_peak_integral,
+                    Form("veto_peak_integral[veto_nch][%d]/F", fdec::MAX_PEAKS));
+    }
 
     tree->Branch("lms_nch",         &ev.lms_nch,         "lms_nch/I");
     tree->Branch("lms_id",          ev.lms_id,           "lms_id[lms_nch]/b");

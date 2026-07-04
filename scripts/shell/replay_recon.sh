@@ -1,5 +1,5 @@
 #!/bin/bash
-# replay_recon.sh — run the single-run PRad-II replay pipeline on JLab ifarm
+# replay_recon.sh — run the single-run PRad replay pipeline on JLab ifarm
 #
 # Usage: chmod +x scripts/shell/replay_recon.sh 
 #       ./replay_recon.sh
@@ -53,6 +53,32 @@ if [[ -z "${RUN_NUMBER}" ]]; then
     echo "ERROR: run number cannot be empty."
     exit 1
 fi
+
+while true; do
+    read -rp "Enter replay mode (prad2, x17, or prad1) [prad2]: " REPLAY_MODE_INPUT
+    REPLAY_MODE_INPUT="${REPLAY_MODE_INPUT,,}"
+    case "${REPLAY_MODE_INPUT}" in
+        ""|prad2|-prad2)
+            REPLAY_MODE_FLAG=""
+            REPLAY_MODE_NAME="PRad2"
+            break
+            ;;
+        x17|-x17)
+            REPLAY_MODE_FLAG="-x17"
+            REPLAY_MODE_NAME="X17"
+            break
+            ;;
+        prad1|-prad1)
+            REPLAY_MODE_FLAG="-prad1"
+            REPLAY_MODE_NAME="PRad1"
+            break
+            ;;
+        *)
+            echo "ERROR: enter prad2, x17, or prad1."
+            ;;
+    esac
+done
+echo "Replay mode: ${REPLAY_MODE_NAME}"
 
 read -rp "Enter output base directory [${OUTPUT_BASE}]: " _INPUT
 [[ -n "${_INPUT}" ]] && OUTPUT_BASE="${_INPUT}"
@@ -134,10 +160,12 @@ if [[ ! -x "${REPLAY_CMD}" ]]; then
 fi
 
 echo "Starting replay..."
-echo "Command: ${REPLAY_CMD} ${RUN_DIR} -o ${OUT_DIR} -j ${REPLAY_CORES} -z ${REPLAY_ZERO_SUPPRESS} -f ${REPLAY_MAX_FILES} -m ${REPLAY_MERGE_FILES}"
+REPLAY_MODE_ARGS=()
+[[ -n "${REPLAY_MODE_FLAG}" ]] && REPLAY_MODE_ARGS+=("${REPLAY_MODE_FLAG}")
+echo "Command: ${REPLAY_CMD} ${RUN_DIR} -o ${OUT_DIR} -j ${REPLAY_CORES} -z ${REPLAY_ZERO_SUPPRESS} -f ${REPLAY_MAX_FILES} -m ${REPLAY_MERGE_FILES} ${REPLAY_MODE_ARGS[*]}"
 echo ""
 
-"${REPLAY_CMD}" "${RUN_DIR}" -o "${OUT_DIR}" -j "${REPLAY_CORES}" -z "${REPLAY_ZERO_SUPPRESS}" -f "${REPLAY_MAX_FILES}" -m "${REPLAY_MERGE_FILES}"
+"${REPLAY_CMD}" "${RUN_DIR}" -o "${OUT_DIR}" -j "${REPLAY_CORES}" -z "${REPLAY_ZERO_SUPPRESS}" -f "${REPLAY_MAX_FILES}" -m "${REPLAY_MERGE_FILES}" "${REPLAY_MODE_ARGS[@]}"
 REPLAY_EXIT=$?
 
 if [[ "${REPLAY_EXIT}" -ne 0 ]]; then

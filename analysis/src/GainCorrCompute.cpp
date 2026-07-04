@@ -10,8 +10,12 @@
 #include <TFile.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 
 namespace analysis {
 namespace {
@@ -24,6 +28,98 @@ TH1F *makeH(const char *name)
 void resetH(TH1F *h)
 {
     h->Reset("ICESM");
+}
+
+struct UnixTimeAnchor {
+    int       event_number = -1;
+    long long ti_ticks     = 0;
+    uint32_t  unix_time    = 0;
+};
+
+void loadUnixTimeAnchors(const std::vector<std::string> &files,
+                         std::vector<UnixTimeAnchor>     &anchors,
+                         bool                            use_epics)
+{
+    for (const auto &path : files) {
+        TFile file(path.c_str(), "READ");
+        if (file.IsZombie()) continue;
+
+        if (use_epics) {
+            auto *tree = file.Get<TTree>("epics");
+            if (!tree) continue;
+
+            prad2::RawEpicsData row;
+            prad2::SetEpicsReadBranches(tree, row);
+            for (Long64_t i = 0; i < tree->GetEntries(); ++i) {
+                row = prad2::RawEpicsData{};
+                tree->GetEntry(i);
+                if (row.unix_time == 0) continue;
+                anchors.push_back({row.event_number_at_arrival,
+                                   row.ti_ticks_at_arrival,
+                                   row.unix_time});
+            }
+        } else {
+            auto *tree = file.Get<TTree>("scalers");
+            if (!tree) continue;
+
+            prad2::RawScalerData row;
+            prad2::SetScalerReadBranches(tree, row);
+            for (Long64_t i = 0; i < tree->GetEntries(); ++i) {
+                row = prad2::RawScalerData{};
+                tree->GetEntry(i);
+                if (row.unix_time == 0) continue;
+                anchors.push_back({row.event_number, row.ti_ticks,
+                                   row.unix_time});
+            }
+        }
+    }
+}
+
+uint32_t batchUnixTime(const std::vector<UnixTimeAnchor> &anchors,
+                       long long batch_ti_ticks,
+                       int       batch_event_number)
+{
+    const UnixTimeAnchor *best = nullptr;
+
+    // TI timestamps give the precise relative position on the run timeline.
+    if (batch_ti_ticks > 0) {
+        uint64_t best_distance = std::numeric_limits<uint64_t>::max();
+        for (const auto &anchor : anchors) {
+            if (anchor.ti_ticks <= 0) continue;
+            const uint64_t distance = static_cast<uint64_t>(
+                std::llabs(batch_ti_ticks - anchor.ti_ticks));
+            if (distance < best_distance) {
+                best = &anchor;
+                best_distance = distance;
+            }
+        }
+    }
+
+    // Legacy files may have unix_time but no ti_ticks_at_arrival branch.
+    if (!best && batch_event_number >= 0) {
+        long long best_distance = std::numeric_limits<long long>::max();
+        for (const auto &anchor : anchors) {
+            if (anchor.event_number < 0) continue;
+            const long long distance = std::llabs(
+                static_cast<long long>(batch_event_number) - anchor.event_number);
+            if (distance < best_distance) {
+                best = &anchor;
+                best_distance = distance;
+            }
+        }
+    }
+
+    if (!best) return 0;
+
+    constexpr double kTiTickSeconds = 4.0e-9;  // 250 MHz TI clock
+    double unix_seconds = static_cast<double>(best->unix_time);
+    if (batch_ti_ticks > 0 && best->ti_ticks > 0)
+        unix_seconds += (batch_ti_ticks - best->ti_ticks) * kTiTickSeconds;
+
+    if (!std::isfinite(unix_seconds) || unix_seconds <= 0.0 ||
+        unix_seconds > static_cast<double>(std::numeric_limits<uint32_t>::max()))
+        return 0;
+    return static_cast<uint32_t>(std::llround(unix_seconds));
 }
 
 } // namespace
@@ -56,6 +152,7 @@ void SetupGainBranches(TTree *tree, GainBatch &b)
     tree->Branch("n_lms_events",    &b.n_lms_events,    "n_lms_events/I");
     tree->Branch("n_alpha_events",  &b.n_alpha_events,  "n_alpha_events/I");
     tree->Branch("ref_run",         &b.ref_run,         "ref_run/I");
+    tree->Branch("unix_time",       &b.unix_time,       "unix_time/i");
 
     tree->Branch("refPMT_ratio",       b.refPMT_ratio,
                  Form("refPMT_ratio[%d]/F",       kGainNLMS));
@@ -131,6 +228,20 @@ bool ComputeGainCorrections(const std::vector<std::string> &lms_files,
     prad2::LMSEventData ev;
     prad2::SetLMSReadBranches(&chain, ev);
 
+    // Process_LMSgainFactor writes EPICS and scaler side trees alongside
+    // lms_gain.  EPICS provides the preferred absolute-time pins; scaler
+    // pins are a fallback for runs/files without usable EPICS records.
+    std::vector<UnixTimeAnchor> time_anchors;
+    loadUnixTimeAnchors(lms_files, time_anchors, true);
+    const char *time_anchor_source = "EPICS";
+    if (time_anchors.empty()) {
+        loadUnixTimeAnchors(lms_files, time_anchors, false);
+        time_anchor_source = "scaler";
+    }
+    std::cout << "  [gain] time anchors: " << time_anchors.size();
+    if (!time_anchors.empty()) std::cout << " (" << time_anchor_source << ")";
+    std::cout << "\n";
+
     TH1F *mod_lms  [kGainNW];
     TH1F *ref_lms  [kGainNLMS];
     TH1F *ref_alpha[kGainNLMS];
@@ -156,6 +267,7 @@ bool ComputeGainCorrections(const std::vector<std::string> &lms_files,
     int      alpha_count = 0;
     int      batch_id    = 0;
     int      ev_start    = 0;
+    long long ti_start   = 0;
 
     auto captureForPlot = [&]() {
         if (!plot_cfg || !plot_cfg->enabled || !plot_store) return;
@@ -207,7 +319,10 @@ bool ComputeGainCorrections(const std::vector<std::string> &lms_files,
         }
 
         if (is_lms) {
-            if (lms_count == 0) ev_start = ev.event_num;
+            if (lms_count == 0) {
+                ev_start = ev.event_num;
+                ti_start = ev.timestamp;
+            }
             ++lms_count;
         }
         if (is_alpha) ++alpha_count;
@@ -218,6 +333,9 @@ bool ComputeGainCorrections(const std::vector<std::string> &lms_files,
             batch.event_num_end   = ev.event_num;
             batch.n_lms_events    = lms_count;
             batch.n_alpha_events  = alpha_count;
+            const long long ti_mid = ti_start + (ev.timestamp - ti_start) / 2;
+            const int event_mid = ev_start + (ev.event_num - ev_start) / 2;
+            batch.unix_time = batchUnixTime(time_anchors, ti_mid, event_mid);
 
             FlushGainBatch(batch, out_tree, mod_lms, ref_lms, ref_alpha, ref_tbl);
             captureForPlot();

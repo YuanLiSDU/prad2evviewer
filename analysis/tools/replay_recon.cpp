@@ -2,19 +2,20 @@
 // replay_recon — convert multiple EVIO files to reconstructed ROOT trees (multi-threaded)
 //
 // Usage: prad2ana_replay_recon <evio_file_or_dir> [more files/dirs...]
-//                     -o output_dir [-f max_files] [-n max_events] [-p] [-j num_threads]
+//                     -o output_dir [-f max_files] [-n max_events] [-prad1] [-j num_threads]
 //                     [-c daq_config.json] [-d daq_map.json]
-//                     [-g gem_pedestal.json] [-z zerosup_threshold] [-m merge_files]
+//                     [-g gem_pedestal.json] [-z zerosup_threshold] [-m merge_files] [-x17]
 //   -o  output directory (REQUIRED)
 //   -f  max files to process (default: all)
 //   -n  max events per file (default: all)
-//   -p  read prad1 data and do not include GEM
+//   -prad1  read PRad-1 data and do not include GEM
 //   -j  number of threads (default: 4)
 //   -c  DAQ configuration file
 //   -d  HyCal map file (default: <db>/hycal_map.json)
 //   -g  GEM pedestal file
 //   -z  zero-suppression threshold override
 //   -m  merge this many split ROOT files per hadd output (default: 62; 0 disables)
+//   -x17  run the X17 reconstruction path (default without a mode option: PRad2)
 //=============================================================================
 
 #include "Replay.h"
@@ -192,6 +193,7 @@ int main(int argc, char *argv[])
     int num_threads = 4;
     int merge_batch_size = 62;
     bool prad1 = false;
+    bool x17 = false;
 
     std::string db_dir = prad2::resolve_data_dir(
         "PRAD2_DATABASE_DIR",
@@ -199,8 +201,15 @@ int main(int argc, char *argv[])
         DATABASE_DIR);
     daq_config = db_dir + "/daq_config.json"; // default DAQ config for PRad2
 
+    static const option long_options[] = {
+        {"prad1", no_argument, nullptr, 1001},
+        {"x17", no_argument, nullptr, 1000},
+        {nullptr, 0, nullptr, 0}
+    };
+
     int opt;
-    while ((opt = getopt(argc, argv, "o:f:c:d:j:g:z:m:p")) != -1) {
+    while ((opt = getopt_long_only(argc, argv, "o:f:c:d:j:g:z:m:",
+                                   long_options, nullptr)) != -1) {
         switch (opt) {
             case 'o': output_dir = optarg; break;
             case 'f': max_files = std::atoi(optarg); break;
@@ -210,7 +219,8 @@ int main(int argc, char *argv[])
             case 'g': gem_ped_file = optarg; break;
             case 'z': zerosup_override = std::atof(optarg); break;
             case 'm': merge_batch_size = std::atoi(optarg); break;
-            case 'p': prad1 = true; break;
+            case 1000: x17 = true; break;
+            case 1001: prad1 = true; break;
         }
     }
 
@@ -224,7 +234,7 @@ int main(int argc, char *argv[])
     if (evio_files.empty() || output_dir.empty()) {
         std::cerr << "Usage: prad2ana_replay_recon <evio_file_or_dir> [more files/dirs...] -o output_dir\n"
                   << "       [-f max_files] [-j threads] [-c daq_config.json] [-d daq_map.json]\n"
-                  << "       [-g gem_ped.json] [-z threshold] [-m merge_files] [-p]\n";
+                  << "       [-g gem_ped.json] [-z threshold] [-m merge_files] [-prad1] [-x17]\n";
         std::cerr << "  -o  output directory (REQUIRED)\n";
         std::cerr << "  -f  max files to process (default: all)\n";
         std::cerr << "  -j  number of threads (default: 4)\n";
@@ -233,9 +243,16 @@ int main(int argc, char *argv[])
         std::cerr << "  -g  GEM pedestal JSON\n";
         std::cerr << "  -z  zero-suppression threshold override\n";
         std::cerr << "  -m  merge this many split ROOT files per hadd output (default: 62; 0 disables)\n";
-        std::cerr << "  -p  PRad1 mode (no GEM)\n";
+        std::cerr << "  default  PRad2 mode\n";
+        std::cerr << "  -prad1  PRad-1 mode (no GEM)\n";
+        std::cerr << "  -x17  run the X17 reconstruction path\n";
         return 1;
     }
+    if (prad1 && x17) {
+        std::cerr << "Options -prad1 and -x17 cannot be used together\n";
+        return 1;
+    }
+    std::cout << "Replay mode: " << (x17 ? "X17" : prad1 ? "PRad1" : "PRad2") << "\n";
     if (merge_batch_size < 0)
         merge_batch_size = 0;
     int num_files = static_cast<int>(evio_files.size());
@@ -285,8 +302,11 @@ int main(int argc, char *argv[])
             if (idx >= num_files) break;
 
             std::string out = output_dir + "/" + makeOutputFile(evio_files[idx]);
-            bool ok = replay.ProcessWithRecon(evio_files[idx], out, gRunConfig, db_dir, daq_config,
-                                              gem_ped_file, zerosup_override, prad1);
+            bool ok = x17
+                ? replay.ProcessWithReconX17(evio_files[idx], out, gRunConfig, db_dir,
+                                             daq_config, gem_ped_file, zerosup_override)
+                : replay.ProcessWithRecon(evio_files[idx], out, gRunConfig, db_dir,
+                                          daq_config, gem_ped_file, zerosup_override, prad1);
             output_files[idx] = out;
             if (ok)
                 output_ok[idx] = 1;

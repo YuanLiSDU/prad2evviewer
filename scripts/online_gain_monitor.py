@@ -19,9 +19,11 @@ import re
 import shlex
 import shutil
 import sys
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 try:
     import numpy as np
@@ -39,7 +41,7 @@ except ImportError:
 from PyQt6.QtCore import QObject, QProcess, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QHBoxLayout,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QSplitter,
     QTextEdit, QVBoxLayout, QWidget,
 )
@@ -70,6 +72,7 @@ DEFAULT_RUNS_SHOWN = 5
 DEFAULT_GAIN_DROP_WARN_PCT = 3.0
 DEFAULT_MAX_DOWNLOAD_EVIO = 10
 DEFAULT_QUEUE_CAP_EVIO = 100
+NEW_YORK_TZ = ZoneInfo("America/New_York")
 LOG_MAX_BLOCKS = 1500
 LOG_FLUSH_MS = 100
 MAINTENANCE_INTERVAL_MS = 5 * 60 * 1000
@@ -165,6 +168,7 @@ class GainData:
     path: Path
     event_start: object
     event_end: object
+    unix_time: object
     gain_w: object
     gain_w_ref: object
     gain_corr_w: object
@@ -177,13 +181,15 @@ class GainData:
 
 
 def find_update_tool() -> str:
+    # Prefer the executable built from the same source tree as this GUI.
+    # A PATH installation may be older and lack newer options such as -a.
     candidates = [
-        shutil.which("prad2ana_online_gain_monitor_base"),
         str((SCRIPT_DIR / ".." / "build" / "bin" / "prad2ana_online_gain_monitor_base").resolve()),
         str((SCRIPT_DIR / ".." / "build-clang" / "bin" / "prad2ana_online_gain_monitor_base").resolve()),
+        shutil.which("prad2ana_online_gain_monitor_base"),
     ]
     for c in candidates:
-        if c and os.path.exists(c):
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return c
     return "prad2ana_online_gain_monitor_base"
 
@@ -218,6 +224,11 @@ def load_gain_root(path: Path, run_number: int) -> GainData:
         t = f["gain_corr"]
         event_start = t["event_num_start"].array(library="np")
         event_end = t["event_num_end"].array(library="np")
+        unix_time = (
+            t["unix_time"].array(library="np")
+            if "unix_time" in t.keys()
+            else np.zeros(len(event_start), dtype=np.uint32)
+        )
         if len(event_start) == 0:
             raise RuntimeError(f"No batch entries in gain_corr tree: {path}")
         gain_w = t["gain_W"].array(library="np")
@@ -232,12 +243,47 @@ def load_gain_root(path: Path, run_number: int) -> GainData:
             path=path,
             event_start=event_start,
             event_end=event_end,
+            unix_time=unix_time,
             gain_w=gain_w,
             gain_w_ref=gain_w_ref,
             gain_corr_w=gain_corr_w,
             fit_mean_w_lms=t["fit_mean_W_lms"].array(library="np"),
             ref_ratio=t["refPMT_ratio"].array(library="np"),
         )
+
+
+def _parse_lms_dat(path: Path) -> Optional[np.ndarray]:
+    """Parse prad_XXXXXX_LMS.dat; return ref gain array [1156, 3].
+
+    The .dat file columns are:
+      0:Name  1:lms_peak  2:lms_sigma  3:lms_chi2/ndf  4:g1  5:g2  6:g3
+
+    For W module rows, columns 4-6 (g1/g2/g3) store the reference gain values
+    corresponding to Ref PMT 1/2/3, in the same units as gain_W in the ROOT file.
+    Dividing gain_W by these values gives a ratio ~1 for an unchanged gain.
+    """
+    entries: Dict[str, List[float]] = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 7 or parts[0] == "Name":
+                    continue
+                try:
+                    entries[parts[0]] = [float(parts[4]), float(parts[5]), float(parts[6])]
+                except (ValueError, IndexError):
+                    continue
+    except OSError:
+        return None
+    result = np.full((1156, 3), np.nan, dtype=float)
+    for i in range(1156):
+        vals = entries.get(f"W{i + 1}")
+        if vals is None:
+            continue
+        for j in range(3):
+            if vals[j] > 0.0:
+                result[i, j] = vals[j]
+    return result
 
 
 class GainRootLoader(QObject):
@@ -339,7 +385,7 @@ def nice_ticks(y_min: float, y_max: float, target: int = 5) -> Tuple[List[float]
     ticks: List[float] = []
     cur = tick_min
     limit = 0
-    while cur <= tick_max + step * 0.5 and limit < 20:
+    while cur <= tick_max + step * 0.5 and limit < 40:
         ticks.append(0.0 if abs(cur) < step * 1e-6 else cur)
         cur += step
         limit += 1
@@ -402,6 +448,7 @@ class BatchChart(QWidget):
         super().__init__(parent)
         self._title = "No module selected"
         self._x_label = "batch id"
+        self._x_mode = "batch"
         self._x: List[float] = []
         self._series: List[Tuple[str, List[float], QColor, bool]] = []
         self._run_spans: List[Tuple[int, float, float]] = []
@@ -412,9 +459,10 @@ class BatchChart(QWidget):
     def set_data(self, title: str, x: List[float], series: List[Tuple[str, List[float], QColor, bool]],
                  run_spans: Optional[List[Tuple[int, float, float]]] = None,
                  default_y_range: Optional[Tuple[float, float]] = None,
-                 x_label: str = "batch id"):
+                 x_label: str = "batch id", x_mode: str = "batch"):
         self._title = title
         self._x_label = x_label
+        self._x_mode = x_mode
         self._x = x
         self._series = series
         self._run_spans = run_spans or []
@@ -428,7 +476,8 @@ class BatchChart(QWidget):
         p.fillRect(0, 0, w, h, CHART_BG)
 
         pad_l = 64 if w < 420 else 74
-        pad_r, pad_t, pad_b = 12, 46, 50
+        pad_r, pad_t = 12, 46
+        pad_b = 72 if self._x_mode == "unix" else 50
         plot_w = max(1, w - pad_l - pad_r)
         plot_h = max(1, h - pad_t - pad_b)
 
@@ -439,18 +488,26 @@ class BatchChart(QWidget):
 
         finite_vals: List[float] = []
         for _, values, _, _ in self._series:
-            finite_vals.extend(v for v in values if math.isfinite(v))
-        if not self._x or not finite_vals:
+            finite_vals.extend(
+                v for x, v in zip(self._x, values)
+                if math.isfinite(x) and math.isfinite(v)
+            )
+        finite_x = [x for x in self._x if math.isfinite(x)]
+        if not finite_x or not finite_vals:
             p.setPen(CHART_TEXT_DIM)
             p.setFont(QFont("Consolas", 12))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No batch data")
+            message = "No Unix time data" if self._x_mode in {"unix", "minutes"} else "No batch data"
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, message)
             return
 
-        x_min, x_max = min(0.0, min(self._x)), max(self._x)
+        x_min, x_max = min(finite_x), max(finite_x)
+        if self._x_mode != "unix":
+            x_min = min(0.0, x_min)
         if x_min == x_max:
             x_min -= 1
             x_max += 1
-        x_ticks, x_min, x_max, x_decimals = nice_ticks(x_min, x_max, 7)
+        x_tick_target = max(10, min(20, plot_w // 45)) if self._x_mode == "unix" else 24
+        x_ticks, x_min, x_max, x_decimals = nice_ticks(x_min, x_max, x_tick_target)
         x_ticks = [t for t in x_ticks if x_min <= t <= x_max]
 
         data_y_min, data_y_max = min(finite_vals), max(finite_vals)
@@ -461,7 +518,7 @@ class BatchChart(QWidget):
                 y_min -= (self._default_y_range[0] - data_y_min) * 0.08
             if data_y_max > self._default_y_range[1]:
                 y_max += (data_y_max - self._default_y_range[1]) * 0.08
-            y_ticks_all, _, _, y_decimals = nice_ticks(y_min, y_max, 5)
+            y_ticks_all, _, _, y_decimals = nice_ticks(y_min, y_max, 24)
             y_ticks = [t for t in y_ticks_all if y_min <= t <= y_max]
         else:
             y_min, y_max = data_y_min, data_y_max
@@ -473,7 +530,7 @@ class BatchChart(QWidget):
                 d = (y_max - y_min) * 0.12
                 y_min -= d
                 y_max += d
-            y_ticks, y_min, y_max, y_decimals = nice_ticks(y_min, y_max, 5)
+            y_ticks, y_min, y_max, y_decimals = nice_ticks(y_min, y_max, 24)
 
         def sx(x):
             return pad_l + (x - x_min) / (x_max - x_min) * plot_w
@@ -515,9 +572,19 @@ class BatchChart(QWidget):
             p.drawText(4, int(yy + 4), tick_label(tick, y_decimals))
         for tick in x_ticks:
             xx = sx(tick)
-            label = tick_label(tick, x_decimals)
-            tw = p.fontMetrics().horizontalAdvance(label)
-            p.drawText(int(xx - tw / 2), pad_t + plot_h + 16, label)
+            if self._x_mode == "unix":
+                p.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
+                label = datetime.fromtimestamp(tick, NEW_YORK_TZ).strftime("%m-%d\n%H:%M")
+                label_x = max(pad_l, min(int(xx - 25), pad_l + plot_w - 50))
+                p.drawText(
+                    label_x, pad_t + plot_h + 4, 50, 30,
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                    label,
+                )
+            else:
+                label = tick_label(tick, x_decimals)
+                tw = p.fontMetrics().horizontalAdvance(label)
+                p.drawText(int(xx - tw / 2), pad_t + plot_h + 16, label)
         p.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
         xlabel = p.fontMetrics().elidedText(self._x_label, Qt.TextElideMode.ElideRight, max(40, plot_w))
         tw = p.fontMetrics().horizontalAdvance(xlabel)
@@ -528,7 +595,7 @@ class BatchChart(QWidget):
             pts = [
                 (sx(x), sy(v))
                 for x, v in zip(self._x, values)
-                if math.isfinite(v) and y_min <= v <= y_max
+                if math.isfinite(x) and math.isfinite(v) and y_min <= v <= y_max
             ]
             if len(pts) < 1:
                 continue
@@ -547,7 +614,9 @@ class BatchChart(QWidget):
             item_w = [fm.horizontalAdvance(label) + 22 for label, _, _, _ in legend_items]
             total_w = min(sum(item_w) + 12, max(80, plot_w - 12))
             lx = pad_l + plot_w - total_w - 6
-            ly = pad_t + plot_h - 26
+            # Keep the Ref1/Ref2/Ref3 legend outside the plotting rectangle,
+            # in the chart header's upper-right corner.
+            ly = 5
             lh = 20
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(CHART_LEGEND_BG)
@@ -574,6 +643,7 @@ class RefRatioChart(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._x: List[float] = []
+        self._x_mode = "batch"
         self._ratios: List[List[float]] = [[], [], []]
         self._ok: List[List[bool]] = [[], [], []]
         self._run_spans: List[Tuple[int, float, float]] = []
@@ -583,8 +653,9 @@ class RefRatioChart(QWidget):
 
     def set_data(self, x: List[float], ratios: List[List[float]],
                  ok: List[List[bool]], run_spans: List[Tuple[int, float, float]],
-                 centers: Optional[List[float]] = None):
+                 centers: Optional[List[float]] = None, x_mode: str = "batch"):
         self._x = x
+        self._x_mode = x_mode
         self._ratios = ratios
         self._ok = ok
         self._run_spans = run_spans
@@ -602,16 +673,19 @@ class RefRatioChart(QWidget):
         p.drawText(8, 18, "Ref PMT LMS/Alpha ratio")
 
         finite = [
-            v for series in self._ratios for v in series
-            if math.isfinite(v) and v > 0.0
+            v for series in self._ratios for x, v in zip(self._x, series)
+            if math.isfinite(x) and math.isfinite(v) and v > 0.0
         ]
-        if not self._x or not finite:
+        finite_x = [x for x in self._x if math.isfinite(x)]
+        if not finite_x or not finite:
             p.setPen(CHART_TEXT_DIM)
             p.setFont(QFont("Consolas", 10))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No ref ratio data")
             return
 
-        x_min, x_max = min(0.0, min(self._x)), max(self._x)
+        x_min, x_max = min(finite_x), max(finite_x)
+        if self._x_mode != "unix":
+            x_min = min(0.0, x_min)
         if x_min == x_max:
             x_min -= 1.0
             x_max += 1.0
@@ -643,7 +717,7 @@ class RefRatioChart(QWidget):
                 d = (y_max - y_min) * 0.15
                 y_min -= d
                 y_max += d
-            ticks, y_min, y_max, decimals = nice_ticks(y_min, y_max, 4)
+            ticks, y_min, y_max, decimals = nice_ticks(y_min, y_max, 20)
             y_ranges.append((y_min, y_max))
             y_ticks_by_panel.append(ticks)
             y_decimals.append(decimals)
@@ -664,8 +738,8 @@ class RefRatioChart(QWidget):
         for panel in range(3):
             x0 = pad_l + panel * (panel_w + gap)
             p.setPen(QPen(CHART_GRID, 1))
-            for i in range(6):
-                xx = x0 + panel_w * i / 5
+            for i in range(21):
+                xx = x0 + panel_w * i / 20
                 p.drawLine(int(xx), pad_t, int(xx), pad_t + plot_h)
             p.setPen(QPen(CHART_BORDER, 1))
             p.setBrush(Qt.BrushStyle.NoBrush)
@@ -692,7 +766,7 @@ class RefRatioChart(QWidget):
 
             pts = []
             for x, y, ok in zip(self._x, self._ratios[panel], self._ok[panel]):
-                if not (math.isfinite(y) and y > 0.0):
+                if not (math.isfinite(x) and math.isfinite(y) and y > 0.0):
                     continue
                 px, py = sx(panel, x), sy(panel, y)
                 pts.append((px, py, ok))
@@ -726,16 +800,20 @@ class OnlineGainMonitor(QMainWindow):
         super().__init__()
         self._modules = load_modules(MODULES_JSON)
         self._selected_module = "W1"
+        self._x_axis_mode = "batch"
         self._data: Optional[GainData] = None
         self._runs_data: Dict[int, GainData] = {}
         self._known_runs: set[int] = set()
         self._opened_output_folder: Optional[Path] = None
         self._ref_gain_file: Optional[Path] = None
+        self._ref_file_gain_array: Optional[np.ndarray] = None
+        self._ref_gain_cache: Dict[int, Optional[np.ndarray]] = {}
         self._last_gain_drop_warning_key: Optional[Tuple[int, int, float]] = None
         self._replay_queue: List[Tuple[int, Path]] = []
         self._queued_snapshots: set[Path] = set()
         self._active_replay_snapshots: List[Path] = []
         self._active_replay_file_count = 0
+        self._reanalyze_pending = False
         self._scan_copied_count = 0
         self._scan_floor_run: Optional[int] = None
         self._last_pending_evio_count = 0
@@ -754,10 +832,18 @@ class OnlineGainMonitor(QMainWindow):
         self._replay_process.readyReadStandardOutput.connect(self._on_stdout)
         self._replay_process.readyReadStandardError.connect(self._on_stderr)
         self._replay_process.finished.connect(self._on_replay_finished)
+        self._reanalyze_process = QProcess(self)
+        self._reanalyze_process.readyReadStandardOutput.connect(self._on_stdout)
+        self._reanalyze_process.readyReadStandardError.connect(self._on_stderr)
+        self._reanalyze_process.finished.connect(self._on_reanalyze_finished)
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._scan_once)
+        self._batch_reanalyze_timer = QTimer(self)
+        self._batch_reanalyze_timer.setSingleShot(True)
+        self._batch_reanalyze_timer.setInterval(600)
+        self._batch_reanalyze_timer.timeout.connect(self._reanalyze_lms)
 
         self._build_ui()
         self._log_buffer: List[Tuple[str, str]] = []
@@ -842,7 +928,10 @@ class OnlineGainMonitor(QMainWindow):
         self._batch.setValue(DEFAULT_BATCH_SIZE)
         self._batch.setSingleStep(100)
         self._batch.setFixedWidth(95)
+        self._batch.valueChanged.connect(self._schedule_batch_reanalysis)
         top.addWidget(self._batch)
+        self._reanalyze_btn = self._button("Re-analyze", THEME.ACCENT, self._reanalyze_lms)
+        top.addWidget(self._reanalyze_btn)
 
         top.addWidget(self._label("evio skip"))
         self._evio_skip = QSpinBox()
@@ -886,6 +975,7 @@ class OnlineGainMonitor(QMainWindow):
         self._ref_run.setValue(-1)
         self._ref_run.setSpecialValueText("auto")
         self._ref_run.setFixedWidth(90)
+        self._ref_run.valueChanged.connect(self._on_ref_run_changed)
         top2.addWidget(self._ref_run)
 
         self._ref_file_btn = self._button("Ref File", THEME.ACCENT, self._browse_ref_gain_file)
@@ -1011,6 +1101,33 @@ class OnlineGainMonitor(QMainWindow):
         ))
         self._run_avg_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         right_lay.addWidget(self._run_avg_label)
+
+        axis_bar = QWidget()
+        axis_lay = QHBoxLayout(axis_bar)
+        axis_lay.setContentsMargins(0, 0, 0, 0)
+        axis_lay.setSpacing(4)
+        axis_lay.addStretch()
+        axis_lay.addWidget(self._label("X axis"))
+        self._x_axis_group = QButtonGroup(self)
+        self._x_axis_group.setExclusive(True)
+        self._x_axis_buttons: Dict[str, QPushButton] = {}
+        for mode, text in (("batch", "Batch ID"), ("unix", "Date/Time"), ("minutes", "Minutes")):
+            btn = QPushButton(text)
+            btn.setCheckable(True)
+            btn.setChecked(mode == self._x_axis_mode)
+            btn.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
+            btn.setStyleSheet(themed(
+                f"QPushButton{{background:{THEME.BUTTON};color:{THEME.TEXT_DIM};"
+                f"border:1px solid {THEME.BORDER};border-radius:3px;padding:3px 8px;}}"
+                f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};}}"
+                f"QPushButton:checked{{background:{THEME.ACCENT};color:white;"
+                f"border-color:{THEME.ACCENT};}}"
+            ))
+            btn.clicked.connect(lambda checked, m=mode: checked and self._set_x_axis_mode(m))
+            self._x_axis_group.addButton(btn)
+            self._x_axis_buttons[mode] = btn
+            axis_lay.addWidget(btn)
+        right_lay.addWidget(axis_bar)
         right_lay.addWidget(self._chart, stretch=3)
         right_lay.addWidget(self._ratio_chart, stretch=2)
 
@@ -1133,6 +1250,71 @@ class OnlineGainMonitor(QMainWindow):
         self._ref_gain_file = Path(path)
         self._ref_file_btn.setText(f"Ref: {self._ref_gain_file.name}")
         self._append(f"Using reference gain file: {self._ref_gain_file}", "ok")
+        self._ref_file_gain_array = _parse_lms_dat(self._ref_gain_file)
+        if self._ref_file_gain_array is None:
+            self._append(f"Warning: failed to parse ref gain from {self._ref_gain_file.name}", "warn")
+        else:
+            self._append(f"Ref gain loaded: {int(np.sum(np.isfinite(self._ref_file_gain_array[:, 0])))} valid W modules", "ok")
+        self._ref_gain_cache.clear()
+        self._view_context = None
+        if hasattr(self, "_runs_data") and self._runs_data:
+            self._refresh_views()
+
+    def _on_ref_run_changed(self):
+        self._ref_gain_cache.clear()
+        self._view_context = None
+        if hasattr(self, "_runs_data") and self._runs_data:
+            self._refresh_views()
+
+    def _get_ref_run_gain(self) -> Optional[np.ndarray]:
+        """Return ref gain array [1156, 3], or None (use embedded gain_W_ref).
+
+        Priority:
+          1. Explicitly selected .dat file via Ref File button
+          2. prad_XXXXXX_LMS.dat in DB_DIR/gain_factor/ref_gain/ for ref run spinbox
+          3. Average gain_W from gain_corr.root in storage
+        """
+        # Priority 1: directly selected ref gain file
+        if self._ref_gain_file is not None:
+            return self._ref_file_gain_array
+
+        ref_run_num = self._ref_run.value()
+        if ref_run_num < 0:
+            return None
+        if ref_run_num in self._ref_gain_cache:
+            return self._ref_gain_cache[ref_run_num]
+
+        # 1. Try .dat file
+        dat_path = DB_DIR / "gain_factor" / "ref_gain" / f"prad_{ref_run_num:06d}_LMS.dat"
+        if dat_path.exists():
+            result = _parse_lms_dat(dat_path)
+            if result is not None:
+                self._ref_gain_cache[ref_run_num] = result
+                self._append(f"Loaded ref gain from {dat_path.name}", "ok")
+                return result
+            self._append(f"Failed to parse ref gain file: {dat_path.name}", "warn")
+
+        # 2. Fall back to gain_corr.root
+        storage = self._storage_base.text().strip() or STORAGE_BASE
+        _, _, path = run_storage_paths(ref_run_num, storage)
+        if not path.exists():
+            self._append(f"Ref run {ref_run_num:06d}: no .dat or gain_corr.root found", "warn")
+            self._ref_gain_cache[ref_run_num] = None
+            return None
+        try:
+            ref_data = load_gain_root(path, ref_run_num)
+        except Exception as exc:
+            self._append(f"Failed to load ref run {ref_run_num:06d}: {exc}", "error")
+            self._ref_gain_cache[ref_run_num] = None
+            return None
+        arr = np.asarray(ref_data.gain_w, dtype=float)
+        valid = np.isfinite(arr) & (arr > 0.0)
+        count = np.sum(valid, axis=0)
+        total = np.sum(np.where(valid, arr, 0.0), axis=0)
+        result = safe_divide(total, count, count > 0)
+        self._ref_gain_cache[ref_run_num] = result
+        self._append(f"Loaded ref gain from run {ref_run_num:06d}: {path.name}", "ok")
+        return result
 
     def _runs_shown_changed(self):
         if self._opened_output_folder is not None:
@@ -1187,10 +1369,14 @@ class OnlineGainMonitor(QMainWindow):
 
     def _stop(self):
         self._timer.stop()
+        self._batch_reanalyze_timer.stop()
+        self._reanalyze_pending = False
         if self._download_process.state() != QProcess.ProcessState.NotRunning:
             self._download_process.kill()
         if self._replay_process.state() != QProcess.ProcessState.NotRunning:
             self._replay_process.kill()
+        if self._reanalyze_process.state() != QProcess.ProcessState.NotRunning:
+            self._reanalyze_process.kill()
         self._replay_queue.clear()
         self._queued_snapshots.clear()
         self._active_replay_snapshots.clear()
@@ -1435,7 +1621,10 @@ exit 0
             )
         self._active_replay_file_count = 0
         self._load_root()
-        self._start_next_replay()
+        if self._reanalyze_pending:
+            self._reanalyze_lms()
+        else:
+            self._start_next_replay()
 
     def _enqueue_replay_snapshot(self, run: int, snapshot: Path) -> bool:
         snapshot = snapshot.resolve()
@@ -1488,8 +1677,82 @@ exit 0
     def _pending_evio_count(self) -> int:
         return self._last_pending_evio_count
 
+    def _schedule_batch_reanalysis(self, _value=None):
+        self._batch_reanalyze_timer.start()
+
+    def _reanalyze_lms(self):
+        self._batch_reanalyze_timer.stop()
+        if (
+            self._replay_process.state() != QProcess.ProcessState.NotRunning
+            or self._reanalyze_process.state() != QProcess.ProcessState.NotRunning
+        ):
+            self._reanalyze_pending = True
+            self._status.setText("Re-analysis queued")
+            return
+
+        self._reanalyze_pending = False
+        runs = sorted(self._visible_runs_data())
+        if not runs:
+            runs = sorted(set(self._parse_runs()))
+        storage_base = self._storage_base.text().strip() or STORAGE_BASE
+        jobs: List[Tuple[int, Path, Path]] = []
+        for run in runs:
+            _, work_dir, out_root = run_storage_paths(run, storage_base)
+            if work_dir.is_dir() and any(work_dir.glob("*_lms.root")):
+                jobs.append((run, work_dir, out_root))
+        if not jobs:
+            self._status.setText("No LMS ROOT files to re-analyze")
+            self._append("No existing *_lms.root files found for the selected run(s).", "warn")
+            self._start_next_replay()
+            return
+
+        tool = find_update_tool()
+        ref_arg = ""
+        if self._ref_gain_file is not None:
+            ref_arg = f" -R {shlex.quote(str(self._ref_gain_file))}"
+        elif self._ref_run.value() >= 0:
+            ref_arg = f" -r {self._ref_run.value()}"
+
+        commands = []
+        for run, work_dir, out_root in jobs:
+            commands.append(
+                f'echo "Re-analyzing run {run:06d}: batch={self._batch.value()}"\n'
+                f'mkdir -p {shlex.quote(str(out_root.parent))}\n'
+                f'nice -n 10 {shlex.quote(tool)} -a '
+                f'-w {shlex.quote(str(work_dir))} '
+                f'-o {shlex.quote(str(out_root))} '
+                f'-b {self._batch.value()}{ref_arg}'
+            )
+        bash = "set -euo pipefail\n" + "\n".join(commands)
+
+        self._reanalyze_btn.setEnabled(False)
+        self._status.setText("Re-analyzing LMS ROOT files...")
+        self._append(
+            f"$ {tool} -a  # re-analyze {len(jobs)} run(s), batch size {self._batch.value()}",
+            "cmd",
+        )
+        replay_cpus = getattr(self, "_replay_worker_cpus", [])
+        cpu_list = _format_cpu_list(replay_cpus[:1]) if replay_cpus else ""
+        start_bash_process(self._reanalyze_process, bash, cpu_list)
+
+    def _on_reanalyze_finished(self, code, status):
+        self._consume_process_output(self._reanalyze_process, is_stderr=False, final=True)
+        self._consume_process_output(self._reanalyze_process, is_stderr=True, final=True)
+        self._reanalyze_btn.setEnabled(True)
+        color = "ok" if code == 0 else "error"
+        self._append(f"[re-analysis finished: exit {code}]", color)
+        self._status.setText("Re-analysis finished" if code == 0 else "Re-analysis failed")
+        self._load_root()
+        if self._reanalyze_pending:
+            self._reanalyze_lms()
+        else:
+            self._start_next_replay()
+
     def _start_next_replay(self):
-        if self._replay_process.state() != QProcess.ProcessState.NotRunning:
+        if (
+            self._replay_process.state() != QProcess.ProcessState.NotRunning
+            or self._reanalyze_process.state() != QProcess.ProcessState.NotRunning
+        ):
             return
         while self._replay_queue:
             run, snapshot = self._replay_queue.pop(0)
@@ -1812,6 +2075,11 @@ echo "__ONLINE_GAIN_STATUS__ run=$RUN remote=0 local=0 copied=0 lms=$LMS_COUNT o
 
     def _quantity_array(self, data: GainData):
         if self._quantity.currentIndex() == 0:
+            ref_gain = self._get_ref_run_gain()
+            if ref_gain is not None:
+                gain_w = np.asarray(data.gain_w, dtype=float)
+                valid = np.isfinite(gain_w) & np.isfinite(ref_gain) & (ref_gain > 0.0)
+                return safe_divide(gain_w, ref_gain, valid)
             valid = (
                 np.isfinite(data.gain_w)
                 & np.isfinite(data.gain_w_ref)
@@ -1827,6 +2095,11 @@ echo "__ONLINE_GAIN_STATUS__ run=$RUN remote=0 local=0 copied=0 lms=$LMS_COUNT o
         return QUANTITIES[idx][0]
 
     def _base_gain_array(self, data: GainData):
+        ref_gain = self._get_ref_run_gain()
+        if ref_gain is not None:
+            gain_w = np.asarray(data.gain_w, dtype=float)
+            valid = np.isfinite(gain_w) & np.isfinite(ref_gain) & (ref_gain > 0.0)
+            return safe_divide(gain_w, ref_gain, valid)
         valid = (
             np.isfinite(data.gain_w)
             & np.isfinite(data.gain_w_ref)
@@ -2218,6 +2491,12 @@ echo "__ONLINE_GAIN_STATUS__ run=$RUN remote=0 local=0 copied=0 lms=$LMS_COUNT o
         self._refresh_chart()
         self._refresh_run_average_monitor()
 
+    def _set_x_axis_mode(self, mode: str):
+        if mode not in {"batch", "unix", "minutes"}:
+            return
+        self._x_axis_mode = mode
+        self._refresh_chart()
+
     def _check_gain_drop_warning(self):
         runs_data = self._visible_runs_data()
         if not runs_data:
@@ -2278,12 +2557,33 @@ echo "__ONLINE_GAIN_STATUS__ run=$RUN remote=0 local=0 copied=0 lms=$LMS_COUNT o
         ref_ratio_values = [[], [], []]
         ref_ratio_ok = [[], [], []]
         avg_values: List[float] = []
+        x_mode = self._x_axis_mode
+        valid_unix_times = [
+            float(value)
+            for data in runs_data.values()
+            for value in np.asarray(data.unix_time).reshape(-1)
+            if math.isfinite(float(value)) and float(value) > 0.0
+        ]
+        unix_origin = min(valid_unix_times) if valid_unix_times else math.nan
         offset = 0.0
         for run, data in sorted(runs_data.items()):
             arr = arrays_by_run[run]
             start = offset
+            run_x: List[float] = []
             for b in range(data.nbatches):
-                x.append(offset)
+                if x_mode == "batch":
+                    x_value = offset
+                else:
+                    unix_value = float(data.unix_time[b]) if b < len(data.unix_time) else 0.0
+                    if not math.isfinite(unix_value) or unix_value <= 0.0:
+                        x_value = math.nan
+                    elif x_mode == "minutes":
+                        x_value = (unix_value - unix_origin) / 60.0
+                    else:
+                        x_value = unix_value
+                x.append(x_value)
+                if math.isfinite(x_value):
+                    run_x.append(x_value)
                 mask = masks_by_run.get(run, [])[b] if b < len(masks_by_run.get(run, [])) else [False, False, False]
                 for j in range(3):
                     ref_ratio_values[j].append(float(data.ref_ratio[b, j]))
@@ -2293,8 +2593,10 @@ echo "__ONLINE_GAIN_STATUS__ run=$RUN remote=0 local=0 copied=0 lms=$LMS_COUNT o
                 avg_values.append(finite_avg(vals) if self._is_change_quantity() else positive_avg(vals))
                 offset += 1.0
             end = offset
-            if end > start:
+            if x_mode == "batch" and end > start:
                 run_spans.append((run, start - 0.5, end - 0.5))
+            elif run_x:
+                run_spans.append((run, min(run_x), max(run_x)))
         ref_idx = self._ref.currentIndex()
         series = []
         if ref_idx < 3:
@@ -2308,20 +2610,28 @@ echo "__ONLINE_GAIN_STATUS__ run=$RUN remote=0 local=0 copied=0 lms=$LMS_COUNT o
             qlabel += " (first 5 avg = 1)"
         span = self._change_map_range()
         default_y = (-span, span) if self._is_change_quantity() else (1.0 - span, 1.0 + span)
-        batch_seconds = self._batch.value() / 10.0
-        batch_minutes = batch_seconds / 60.0
-        if batch_minutes >= 1.0:
-            xlabel = f"batch id (~{batch_minutes:.1f}min)"
+        if x_mode == "unix":
+            xlabel = "New York date / time (ET)"
+        elif x_mode == "minutes":
+            xlabel = "minutes from first valid batch"
         else:
-            xlabel = f"batch id (~{batch_seconds:.0f}s)"
+            batch_seconds = self._batch.value() / 10.0
+            batch_minutes = batch_seconds / 60.0
+            if batch_minutes >= 1.0:
+                xlabel = f"batch id (~{batch_minutes:.1f}min)"
+            else:
+                xlabel = f"batch id (~{batch_seconds:.0f}s)"
         self._chart.set_data(
             f"{self._selected_module} {qlabel}",
-            x, series, run_spans, default_y, xlabel,
+            x, series, run_spans, default_y, xlabel, x_mode,
         )
-        self._ratio_chart.set_data(x, ref_ratio_values, ref_ratio_ok, run_spans, centers)
+        self._ratio_chart.set_data(
+            x, ref_ratio_values, ref_ratio_ok, run_spans, centers, x_mode,
+        )
 
     def closeEvent(self, event):
         self._timer.stop()
+        self._batch_reanalyze_timer.stop()
         self._maintenance_timer.stop()
         self._log_flush_timer.stop()
         self._flush_log()
@@ -2331,6 +2641,9 @@ echo "__ONLINE_GAIN_STATUS__ run=$RUN remote=0 local=0 copied=0 lms=$LMS_COUNT o
         if self._replay_process.state() != QProcess.ProcessState.NotRunning:
             self._replay_process.kill()
             self._replay_process.waitForFinished(2000)
+        if self._reanalyze_process.state() != QProcess.ProcessState.NotRunning:
+            self._reanalyze_process.kill()
+            self._reanalyze_process.waitForFinished(2000)
         if self._root_load_thread is not None:
             self._root_load_thread.requestInterruption()
             self._root_load_thread.quit()

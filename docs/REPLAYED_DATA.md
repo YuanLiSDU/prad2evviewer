@@ -6,7 +6,7 @@ trees, and a small per-run metadata tree in the same ROOT file:
 | Tool | Main tree | Side trees | Contents |
 |---|---|---|---|
 | `prad2ana_replay_rawdata` | `events` | `scalers`, `epics`, `runinfo` | Raw FADC250 waveforms + GEM strip data + raw VTP / TDC banks + optional per-channel peak analysis |
-| `prad2ana_replay_recon`   | `recon`  | `scalers`, `epics`, `runinfo` | HyCal clusters + GEM hits (lab frame) + HyCal↔GEM matches |
+| `prad2ana_replay_recon`   | `recon`  | `scalers`, `epics`, `runinfo` | Standard, PRad-I (`-prad1`), or X17 (`-x17`) reconstruction: HyCal clusters + GEM hits (lab frame) + HyCal↔GEM matches |
 | `prad2ana_replay_filter`  | `events` *or* `recon` | `scalers`, `epics` (with `good`), `runinfo` | Subset of the input main tree retained by slow-control cuts; full slow streams concatenated and tagged; `runinfo` passed through verbatim |
 
 `scalers` / `epics` fire on a different cadence than the main tree
@@ -272,6 +272,17 @@ reconstruction, and per-cluster HyCal↔GEM matching.  All positions are in
 the lab frame (target-centered, beam-aligned, mm).  Trigger filter applied
 upstream — only physics events reach the tree.
 
+The command-line reconstruction modes are:
+
+- default: PRad-II raw-sum, LMS, and Alpha events;
+- `-prad1`: legacy PRad-I ADC1881M reconstruction without GEM;
+- `-x17`: events carrying the 1-, 2-, or 3-cluster trigger bits, plus LMS
+  and Alpha events.
+
+For X17 blind analysis, all 1-/2-cluster events are retained. A
+3-cluster event is retained only when `event_num % 10 == 8`, producing a
+deterministic 10% sample. `-prad1` and `-x17` cannot be combined.
+
 ### Event header
 
 | Branch | Type | Meaning |
@@ -377,7 +388,9 @@ care about clusters confirmed on at least two GEM planes.
 ### Veto + LMS (peak summaries)
 
 Lightweight tag of the best soft peak per Veto / LMS channel — full
-waveforms live in the `events` tree, not here.
+waveforms live in the `events` tree, not here. The Veto group is optional:
+`SetReconWriteBranches(..., is_x17=true)` omits all `veto_*` branches.
+The LMS group remains available in both layouts.
 
 | Branch | Type | Meaning |
 |---|---|---|

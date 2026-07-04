@@ -47,6 +47,9 @@ static constexpr int kMaxGemHits   = 400;
 // precedence when testing — the mask must be parenthesised:
 //   if ((ev.trigger_bits & TBIT_sum) == 0) continue;   // require sum trigger
 static constexpr uint32_t TBIT_sum   = (1u << 8);    // total-energy (sum) trigger
+static constexpr uint32_t TBIT_1cl   = (1u << 9);    // ssp1, 1-cluster trigger
+static constexpr uint32_t TBIT_2cl   = (1u << 10);   // ssp1, 2-cluster trigger
+static constexpr uint32_t TBIT_3cl   = (1u << 11);   // ssp1, 3-cluster trigger
 static constexpr uint32_t TBIT_lms   = (1u << 24);   // LMS light-monitoring
 static constexpr uint32_t TBIT_alpha = (1u << 25);   // alpha / pulser
 

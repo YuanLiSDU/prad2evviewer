@@ -197,12 +197,15 @@ inline std::string FindGainCorrRootFile(const std::string &dir, int run_num)
 }
 
 // A time series of gain correction tables loaded from a replay_gainCorr ROOT
-// file (one entry per LMS batch).  After construction the object is read-only
-// and therefore safe to access concurrently from multiple threads.
+// file (one entry per LMS batch, including its midpoint Unix time when the
+// source file supplied a usable EPICS/scaler anchor).  After construction the
+// object is read-only and therefore safe to access concurrently from multiple
+// threads.
 struct GainCorrTimeSeries {
     struct Batch {
         int           event_num_start = 0;
         int           event_num_end   = 0;
+        uint32_t      unix_time       = 0;
         GainCorrTable corr;
     };
 
@@ -270,11 +273,15 @@ inline GainCorrTimeSeries LoadGainCorrTimeSeries(const std::string &corr_dir,
     static constexpr int kNLMS = 3;
 
     int   ev_start = 0, ev_end = 0;
+    uint32_t unix_time = 0;
     float corr_W[kNW][kNLMS];
 
     tree->SetBranchAddress("event_num_start", &ev_start);
     tree->SetBranchAddress("event_num_end",   &ev_end);
     tree->SetBranchAddress("gain_corr_W",      corr_W);
+    const bool has_unix_time = tree->GetBranch("unix_time") != nullptr;
+    if (has_unix_time)
+        tree->SetBranchAddress("unix_time", &unix_time);
 
     const Long64_t nentries = tree->GetEntries();
     ts.batches.reserve(static_cast<size_t>(nentries));
@@ -285,6 +292,7 @@ inline GainCorrTimeSeries LoadGainCorrTimeSeries(const std::string &corr_dir,
         GainCorrTimeSeries::Batch b;
         b.event_num_start = ev_start;
         b.event_num_end   = ev_end;
+        b.unix_time       = has_unix_time ? unix_time : 0;
         b.corr.cur_run    = run_num;
 
         for (int wi = 0; wi < kNW; ++wi) {

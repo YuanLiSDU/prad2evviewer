@@ -70,6 +70,11 @@ public:
                             const std::string &gem_ped_file = "", float zerosup_override = 0.f,
                             bool prad1 = false);
     
+    bool ProcessWithReconX17(const std::string &input_evio, const std::string &output_root, RunConfig &gRunConfig,
+                            const std::string &db_dir,
+                            const std::string &daq_config_file = "",
+                            const std::string &gem_ped_file = "", float zerosup_override = 0.f);
+    
     bool Process_LMSgainFactor(const std::string &input_evio, const std::string &output_root,
                                 const std::string &db_dir, const std::string &daq_config_file);
 
@@ -77,7 +82,7 @@ private:
     void setupBranches(TTree *tree, EventVars &ev, bool write_peaks);
     void clearEvent(EventVars &ev);
 
-    void setupReconBranches(TTree *tree, EventVars_Recon &ev);
+    void setupReconBranches(TTree *tree, EventVars_Recon &ev, bool x17_mode);
     void clearReconEvent(EventVars_Recon &ev);
 
     void setupLMSBranches(TTree *tree, LMSEventVars &ev);

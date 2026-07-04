@@ -25,15 +25,18 @@ against `libprad2ana.a` (analysis tools, ACLiC scripts in
 ## `Replay.h`
 
 `analysis::Replay` — converts raw DAQ data (EVIO) into ROOT trees.
-Two output modes:
+Three replay entry points:
 
 1. **Raw replay** (`Process`) — per-channel waveform/peak data,
    `events` tree (`prad2::RawEventData`).
 2. **Recon replay** (`ProcessWithRecon`) — full reconstruction
    (HyCal clusters, GEM hits, HyCal↔GEM matches), `recon` tree
    (`prad2::ReconEventData`).
+3. **X17 recon replay** (`ProcessWithReconX17`) — cluster-trigger
+   reconstruction with the X17 blind-sample selection, also written to
+   a `recon` tree.
 
-Both modes also write the side trees `scalers` (DSC2) and `epics`
+All replay entry points also write the side trees `scalers` (DSC2) and `epics`
 (0x001F text banks) — see [`prad2det`](PRAD2DET_API.md#eventdata_ioh).
 
 ### Type aliases
@@ -86,6 +89,14 @@ bool ProcessWithRecon(const std::string &input_evio,
                       const std::string &gem_ped_file    = "",
                       float zerosup_override            = 0.f,
                       bool prad1                        = false);
+
+bool ProcessWithReconX17(const std::string &input_evio,
+                         const std::string &output_root,
+                         RunConfig &gRunConfig,
+                         const std::string &db_dir,
+                         const std::string &daq_config_file = "",
+                         const std::string &gem_ped_file    = "",
+                         float zerosup_override            = 0.f);
 ```
 
 `max_events <= 0` ⇒ process every event. `write_peaks=true` adds the
@@ -98,6 +109,12 @@ HyCal clustering, GEM strip clustering, HyCal↔GEM matching with the
 runinfo σ parameters; `gem_ped_file` overrides the per-run pedestal,
 `zerosup_override > 0` overrides the GEM ZS threshold, `prad1=true`
 selects the legacy ADC1881M readout path.
+
+`ProcessWithReconX17` uses the same detector pipeline and output data
+type, but accepts events carrying `TBIT_1cl`, `TBIT_2cl`, `TBIT_3cl`,
+`TBIT_lms`, or `TBIT_alpha`. It keeps every 1-/2-cluster event and only
+the deterministic 10% of 3-cluster events for which
+`event_num % 10 == 8`.
 
 ---
 

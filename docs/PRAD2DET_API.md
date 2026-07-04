@@ -419,6 +419,20 @@ produced by `analysis/Replay`. No ROOT headers — pure C++ types.
 | `kMaxClusters` | 100 |
 | `kMaxGemHits` | 400 |
 
+### Trigger-bit masks
+
+| Constant | Bit | Meaning |
+|---|---:|---|
+| `TBIT_sum` | 8 | Total-energy/raw-sum trigger |
+| `TBIT_1cl` | 9 | One-cluster trigger |
+| `TBIT_2cl` | 10 | Two-cluster trigger |
+| `TBIT_3cl` | 11 | Three-cluster trigger |
+| `TBIT_lms` | 24 | LMS light-monitoring trigger |
+| `TBIT_alpha` | 25 | Alpha/pulser trigger |
+
+These constants are masks, not bit indexes; test them with
+`(trigger_bits & TBIT_*) != 0`.
+
 ### `prad2::ModuleType` (data-tree level)
 
 `MOD_UNKNOWN = 0`, `MOD_PbGlass = 1`, `MOD_PbWO4 = 2`, `MOD_VETO = 3`,
@@ -447,7 +461,7 @@ the raw 0xE10C SSP trigger bank words.
 HyCal clusters (`n_clusters`, `cl_x/y/z/energy/time/nblocks/center/flag`),
 HyCal↔GEM matches (`matchFlag`, `matchGEM[xyz]`), quick-access matched
 pairs (`match_num`, `mHit_*`), GEM hits (`n_gem_hits`, `det_id`, `gem_*`),
-Veto and LMS soft-peak summaries, and `ssp_raw`.
+Veto (optional) and LMS soft-peak summaries, and `ssp_raw`.
 
 ### `RawScalerData` ("scalers" tree)
 
@@ -470,14 +484,18 @@ Header-only TTree branch I/O — included only by ROOT-aware consumers
 (replay tools, viewer's root data source, sim2replay). The library has
 no link-time ROOT dependency.
 
-### Writers (always set up the same branch list)
+### Writers
 
 ```cpp
 SetRawWriteBranches(TTree*, RawEventData&, bool with_peaks);
-SetReconWriteBranches(TTree*, ReconEventData&);
+SetReconWriteBranches(TTree*, ReconEventData&, bool is_x17 = false);
 SetScalerWriteBranches(TTree*, RawScalerData&);
 SetEpicsWriteBranches(TTree*, RawEpicsData&);
 ```
+
+For recon trees, `is_x17=true` omits the Veto branch group
+(`veto_nch`, `veto_id`, `veto_npeaks`, and `veto_peak_*`). LMS,
+cluster, GEM, trigger-bank, and RF branches are unchanged.
 
 ### Readers (skip missing branches; return optional-group flags)
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # submit_replay_recon.sh
-# Submit one PRad-II replay pipeline job to JLab ifarm Slurm.
+# Submit one PRad replay pipeline job to JLab ifarm Slurm.
 #
 # The generated job runs:
 #   1. prad2ana_replay_recon, with optional grouped hadd merging via -m
@@ -71,7 +71,7 @@ SLURM_TIME="${SLURM_TIME:-12:00:00}"
 SLURM_MEM_PER_CPU="${SLURM_MEM_PER_CPU:-1500}"
 ROOT_SETUP="${ROOT_SETUP:-}"
 
-echo "Submit one PRad-II replay/recon Slurm job"
+echo "Submit one PRad replay/recon Slurm job"
 echo ""
 
 read -rp "Enter run number (e.g. 024650): " RUN_NUMBER
@@ -79,6 +79,32 @@ if [[ -z "${RUN_NUMBER}" ]]; then
     echo "ERROR: run number cannot be empty."
     exit 1
 fi
+
+while true; do
+    read -rp "Enter replay mode (prad2, x17, or prad1) [prad2]: " REPLAY_MODE_INPUT
+    REPLAY_MODE_INPUT="${REPLAY_MODE_INPUT,,}"
+    case "${REPLAY_MODE_INPUT}" in
+        ""|prad2|-prad2)
+            REPLAY_MODE_FLAG=""
+            REPLAY_MODE_NAME="PRad2"
+            break
+            ;;
+        x17|-x17)
+            REPLAY_MODE_FLAG="-x17"
+            REPLAY_MODE_NAME="X17"
+            break
+            ;;
+        prad1|-prad1)
+            REPLAY_MODE_FLAG="-prad1"
+            REPLAY_MODE_NAME="PRad1"
+            break
+            ;;
+        *)
+            echo "ERROR: enter prad2, x17, or prad1."
+            ;;
+    esac
+done
+echo "Replay mode: ${REPLAY_MODE_NAME}"
 
 PRAD2_SOFT="$(prompt_default "Enter prad2evviewer directory" "${PRAD2_SOFT}")"
 if [[ "${PRAD2_BIN_WAS_SET}" -eq 0 ]]; then
@@ -183,6 +209,8 @@ REPLAY_CORES=$(shell_quote "${REPLAY_CORES}")
 REPLAY_ZERO_SUPPRESS=$(shell_quote "${REPLAY_ZERO_SUPPRESS}")
 REPLAY_MAX_FILES=$(shell_quote "${REPLAY_MAX_FILES}")
 REPLAY_MERGE_FILES=$(shell_quote "${REPLAY_MERGE_FILES}")
+REPLAY_MODE_FLAG=$(shell_quote "${REPLAY_MODE_FLAG}")
+REPLAY_MODE_NAME=$(shell_quote "${REPLAY_MODE_NAME}")
 REPORT=$(shell_quote "${REPORT}")
 SLOW_ROOT=$(shell_quote "${SLOW_ROOT}")
 QC_OUTPUT=$(shell_quote "${QC_OUTPUT}")
@@ -192,6 +220,7 @@ ROOT_SETUP=$(shell_quote "${ROOT_SETUP}")
 echo "Host: \$(hostname)"
 echo "Work dir: \$(pwd)"
 echo "Run: \${RUN_NUMBER}"
+echo "Replay mode: \${REPLAY_MODE_NAME}"
 echo "Input: \${RUN_DIR}"
 echo "Output: \${OUT_DIR}"
 date
@@ -233,8 +262,10 @@ fi
 
 echo ""
 echo "Starting replay..."
-echo "\${REPLAY_CMD} \${RUN_DIR} -o \${OUT_DIR} -j \${REPLAY_CORES} -z \${REPLAY_ZERO_SUPPRESS} -f \${REPLAY_MAX_FILES} -m \${REPLAY_MERGE_FILES}"
-"\${REPLAY_CMD}" "\${RUN_DIR}" -o "\${OUT_DIR}" -j "\${REPLAY_CORES}" -z "\${REPLAY_ZERO_SUPPRESS}" -f "\${REPLAY_MAX_FILES}" -m "\${REPLAY_MERGE_FILES}"
+REPLAY_MODE_ARGS=()
+[[ -n "\${REPLAY_MODE_FLAG}" ]] && REPLAY_MODE_ARGS+=("\${REPLAY_MODE_FLAG}")
+echo "\${REPLAY_CMD} \${RUN_DIR} -o \${OUT_DIR} -j \${REPLAY_CORES} -z \${REPLAY_ZERO_SUPPRESS} -f \${REPLAY_MAX_FILES} -m \${REPLAY_MERGE_FILES} \${REPLAY_MODE_ARGS[*]}"
+"\${REPLAY_CMD}" "\${RUN_DIR}" -o "\${OUT_DIR}" -j "\${REPLAY_CORES}" -z "\${REPLAY_ZERO_SUPPRESS}" -f "\${REPLAY_MAX_FILES}" -m "\${REPLAY_MERGE_FILES}" "\${REPLAY_MODE_ARGS[@]}"
 
 mapfile -t RECON_INPUTS < <(find "\${OUT_DIR}" -maxdepth 1 -type f -name "prad_\${RUN_NUMBER}_recon_*.root" | sort)
 if [[ "\${#RECON_INPUTS[@]}" -eq 0 ]]; then

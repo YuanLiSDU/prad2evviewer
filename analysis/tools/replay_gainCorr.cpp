@@ -3,7 +3,9 @@
 //
 // Phase 1: replay EVIO files (multi-threaded) → per-file *_lms.root
 // Phase 2: chain all *_lms.root, accumulate histograms in windows of N LMS
-//          events, fit them, write gain-correction rows to gain_corr.root
+//          events, fit them, write gain-correction rows to gain_corr.root.
+//          Each row includes the batch-midpoint unix_time derived from the
+//          EPICS tree (with the scaler tree as fallback).
 //
 // Usage:
 //   replay_gainCorr <evio_file_or_dir> [more files/dirs...]

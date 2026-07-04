@@ -176,7 +176,7 @@ int main (int argc, char *argv[])
     // create TTree and branches for reconstructed data
     TTree *tree_out = new TTree("recon", "PRad2 replay reconstruction from G4");
     auto ev = std::make_unique<EventVars_Recon>();
-    prad2::SetReconWriteBranches(tree_out, *ev);
+    prad2::SetReconWriteBranches(tree_out, *ev, false); // false indicates not x17_mode
 
     // caculate luminosity and number of events to process for ep and ee
     double lumi = std::min(ep_lumi, ee_lumi);

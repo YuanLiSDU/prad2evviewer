@@ -1,6 +1,6 @@
 #!/bin/bash
 # submit_replay_recon_m.sh
-# Submit multiple single-run PRad-II replay pipeline Slurm jobs.
+# Submit multiple single-run PRad replay pipeline Slurm jobs.
 #
 # Prompts once for shared settings, then feeds each cached run to
 # submit_replay_recon.sh.  The CPU count is entered once and reused by
@@ -81,7 +81,7 @@ SLURM_TIME="${SLURM_TIME:-12:00:00}"
 SLURM_MEM_PER_CPU="${SLURM_MEM_PER_CPU:-1500}"
 ROOT_SETUP="${ROOT_SETUP:-}"
 
-echo "Submit multiple PRad-II replay/recon Slurm jobs"
+echo "Submit multiple PRad replay/recon Slurm jobs"
 echo ""
 
 RUNS=()
@@ -124,6 +124,32 @@ else
         RUNS+=("$(printf "%0${WIDTH}d" "${run}")")
     done
 fi
+
+while true; do
+    read -rp "Enter replay mode (prad2, x17, or prad1) [prad2]: " REPLAY_MODE_INPUT
+    REPLAY_MODE_INPUT="${REPLAY_MODE_INPUT,,}"
+    case "${REPLAY_MODE_INPUT}" in
+        ""|prad2|-prad2)
+            REPLAY_MODE_INPUT_FOR_ONE="prad2"
+            REPLAY_MODE_NAME="PRad2"
+            break
+            ;;
+        x17|-x17)
+            REPLAY_MODE_INPUT_FOR_ONE="x17"
+            REPLAY_MODE_NAME="X17"
+            break
+            ;;
+        prad1|-prad1)
+            REPLAY_MODE_INPUT_FOR_ONE="prad1"
+            REPLAY_MODE_NAME="PRad1"
+            break
+            ;;
+        *)
+            echo "ERROR: enter prad2, x17, or prad1."
+            ;;
+    esac
+done
+echo "Replay mode: ${REPLAY_MODE_NAME}"
 
 PRAD2_SOFT="$(prompt_default "Enter prad2evviewer directory" "${PRAD2_SOFT}")"
 if [[ "${PRAD2_BIN_WAS_SET}" -eq 0 ]]; then
@@ -204,8 +230,9 @@ fi
 echo ""
 for run in "${CACHED_RUNS[@]}"; do
     echo "Submitting replay/recon job for run ${run}..."
-    if ! printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+    if ! printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
             "${run}" \
+            "${REPLAY_MODE_INPUT_FOR_ONE}" \
             "${PRAD2_SOFT}" \
             "${PRAD2_BIN}" \
             "${CACHE_BASE}" \
