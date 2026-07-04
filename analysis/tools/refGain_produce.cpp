@@ -246,6 +246,9 @@ int main(int argc, char *argv[])
                 const bool is_alpha = (nch >= 1 && nch < 50) && trig_alpha;
                 if (!is_lms && !is_alpha) continue;
 
+                if (is_lms)   ++n_lms_ev;
+                if (is_alpha) ++n_alpha_ev;
+
                 // ── Pass 2: decode waveforms, fill histograms ─────────────────
                 for (int r = 0; r < event->nrocs; ++r) {
                     auto &roc = event->rocs[r];
