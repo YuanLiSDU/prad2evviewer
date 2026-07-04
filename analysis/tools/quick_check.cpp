@@ -41,6 +41,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <limits>
 #include <thread>
 #include <unistd.h>
 
@@ -83,6 +84,7 @@ struct QuickResult {
     std::unique_ptr<TH1F> h_tot;
     std::unique_ptr<TH2F> h2_energy_theta_ep_ee;
     MollerData mollers;
+    MollerData mollers_hc;
     Long64_t processed = 0;
 
     std::unique_ptr<TH2F> h2_ep_hits;
@@ -97,6 +99,15 @@ struct QuickResult {
     std::unique_ptr<TH1F> h_ee_center_x;
     std::unique_ptr<TH1F> h_ee_center_y;
     std::unique_ptr<TH1F> h_ee_vertex_z;
+
+    std::unique_ptr<TH2F> h2_ep_hits_hc;
+    std::unique_ptr<TH2F> h2_ee_hits_hc;
+    std::unique_ptr<TH2F> h2_ep_E_angle_hc;
+    std::unique_ptr<TH2F> h2_ee_E_angle_hc;
+
+    std::unique_ptr<TH1F> h_ee_center_x_hc;
+    std::unique_ptr<TH1F> h_ee_center_y_hc;
+    std::unique_ptr<TH1F> h_ee_vertex_z_hc;
 };
 
 static void detach(TH1 *h)
@@ -142,7 +153,24 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     r->h_ee_center_y = std::make_unique<TH1F>("ee_center_y",
         "EE Center Y;Y (mm);Counts", 800, -20, 20);
     r->h_ee_vertex_z = std::make_unique<TH1F>("ee_vertex_z",
-        "EE Vertex Z;Z (mm);Counts", 6000, -5000, 8000);
+        "EE Vertex Z;Z (mm);Counts", 8000, 5000, 9000);
+
+    r->h2_ep_hits_hc = std::make_unique<TH2F>("ep_hits_hc",
+        "EP Hit positions hycal;X (mm);Y (mm)", 720, -360, 360, 720, -360, 360);
+    r->h2_ee_hits_hc = std::make_unique<TH2F>("ee_hits_hc",
+        "EE Hit positions hycal;X (mm);Y (mm)", 720, -360, 360, 720, -360, 360);
+    r->h2_ep_E_angle_hc = std::make_unique<TH2F>("ep_E_angle_hc",
+        "EP Energy vs Angle hycal;Theta (deg);Energy (MeV)", 160, 0, 8, 7500, 0, 5000);
+    r->h2_ee_E_angle_hc = std::make_unique<TH2F>("ee_E_angle_hc",
+        "EE Energy vs Angle hycal;Theta (deg);Energy (MeV)", 160, 0, 8, 7500, 0, 5000);
+
+    r->h_ee_center_x_hc = std::make_unique<TH1F>("ee_center_x_hc",
+        "EE Center X hycal;X (mm);Counts", 800, -20, 20);
+    r->h_ee_center_y_hc = std::make_unique<TH1F>("ee_center_y_hc",
+        "EE Center Y hycal;Y (mm);Counts", 800, -20, 20);
+    r->h_ee_vertex_z_hc = std::make_unique<TH1F>("ee_vertex_z_hc",
+        "EE Vertex Z hycal;Z (mm);Counts", 8000, 5000, 9000);
+
 
     detach(r->hit_pos.get());
     detach(r->h_1cl.get());
@@ -160,6 +188,13 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     detach(r->h_ee_center_x.get());
     detach(r->h_ee_center_y.get());
     detach(r->h_ee_vertex_z.get());
+    detach(r->h2_ep_hits_hc.get());
+    detach(r->h2_ee_hits_hc.get());
+    detach(r->h2_ep_E_angle_hc.get());
+    detach(r->h2_ee_E_angle_hc.get());
+    detach(r->h_ee_center_x_hc.get());
+    detach(r->h_ee_center_y_hc.get());
+    detach(r->h_ee_vertex_z_hc.get());
     return r;
 }
 
@@ -216,6 +251,10 @@ static bool processFile(const std::string &path,
             out.h2_energy_theta_ep_ee->Fill(
                 std::atan(std::sqrt(ev.cl_x[0]*ev.cl_x[0] + ev.cl_y[0]*ev.cl_y[0]) / ev.cl_z[0]) * 180.f / M_PI,
                 ev.cl_energy[0]);
+            out.h2_ep_hits_hc->Fill(ev.cl_x[0], ev.cl_y[0]);
+            out.h2_ep_E_angle_hc->Fill(
+                std::atan(std::sqrt(ev.cl_x[0]*ev.cl_x[0] + ev.cl_y[0]*ev.cl_y[0]) / ev.cl_z[0]) * 180.f / M_PI,
+                ev.cl_energy[0]);
         }
 
         if (ev.n_clusters == 2 && inHyCal(ev.cl_x[0], ev.cl_y[0]) && inHyCal(ev.cl_x[1], ev.cl_y[1])) {
@@ -229,6 +268,29 @@ static bool processFile(const std::string &path,
                     {ev.cl_x[0], ev.cl_y[0], ev.cl_z[0], ev.cl_energy[0]},
                     {ev.cl_x[1], ev.cl_y[1], ev.cl_z[1], ev.cl_energy[1]});
                 physics.FillMollerPhiDiff(physics.GetMollerPhiDiff(mp));
+                if(physics.GetMollerPhiDiff(mp) < 10.f) {
+                    out.h2_ee_hits_hc->Fill(ev.cl_x[0], ev.cl_y[0]);
+                    out.h2_ee_hits_hc->Fill(ev.cl_x[1], ev.cl_y[1]);
+                    float t1 = std::atan2(std::sqrt(ev.cl_x[0]*ev.cl_x[0] + ev.cl_y[0]*ev.cl_y[0]), ev.cl_z[0]) * 180.f / M_PI;
+                    float t2 = std::atan2(std::sqrt(ev.cl_x[1]*ev.cl_x[1] + ev.cl_y[1]*ev.cl_y[1]), ev.cl_z[1]) * 180.f / M_PI;
+                    out.h2_ee_E_angle_hc->Fill(t1, ev.cl_energy[0]);
+                    out.h2_ee_E_angle_hc->Fill(t2, ev.cl_energy[1]);
+                    out.mollers_hc.push_back(mp);
+
+                    if (out.mollers_hc.size() > 1) {
+                        auto center = physics.GetMollerCenter(out.mollers_hc[out.mollers_hc.size() - 2], mp);
+                        out.h_ee_center_x_hc->Fill(center[0]);
+                        out.h_ee_center_y_hc->Fill(center[1]);
+                        if (out.mollers_hc.size() > 2) {
+                            auto center2 = physics.GetMollerCenter(out.mollers_hc[out.mollers_hc.size() - 3], mp);
+                            out.h_ee_center_x_hc->Fill(center2[0]);
+                            out.h_ee_center_y_hc->Fill(center2[1]);
+                        }
+                    }
+                    float vertex = physics.GetMollerZdistance(mp, Ebeam);
+                    out.h_ee_vertex_z_hc->Fill(vertex);
+
+                }
             }
         }
 
@@ -354,6 +416,13 @@ static void mergeResult(QuickResult &dst, const QuickResult &src, fdec::HyCalSys
     dst.h_ee_center_x->Add(src.h_ee_center_x.get());
     dst.h_ee_center_y->Add(src.h_ee_center_y.get());
     dst.h_ee_vertex_z->Add(src.h_ee_vertex_z.get());
+    dst.h2_ep_hits_hc->Add(src.h2_ep_hits_hc.get());
+    dst.h2_ee_hits_hc->Add(src.h2_ee_hits_hc.get());
+    dst.h2_ep_E_angle_hc->Add(src.h2_ep_E_angle_hc.get());
+    dst.h2_ee_E_angle_hc->Add(src.h2_ee_E_angle_hc.get());
+    dst.h_ee_center_x_hc->Add(src.h_ee_center_x_hc.get());
+    dst.h_ee_center_y_hc->Add(src.h_ee_center_y_hc.get());
+    dst.h_ee_vertex_z_hc->Add(src.h_ee_vertex_z_hc.get());
 
     dst.physics->GetEnergyVsModuleHist()->Add(src.physics->GetEnergyVsModuleHist());
     dst.physics->GetEnergyVsThetaHist()->Add(src.physics->GetEnergyVsThetaHist());
@@ -498,6 +567,11 @@ int main(int argc, char *argv[])
     merged->h_ee_center_x->Write();
     merged->h_ee_center_y->Write();
     merged->h_ee_vertex_z->Write();
+    merged->h2_ep_hits_hc->Write();
+    merged->h2_ee_hits_hc->Write();
+    merged->h_ee_center_x_hc->Write();
+    merged->h_ee_center_y_hc->Write();
+    merged->h_ee_vertex_z_hc->Write();
 
     outfile.mkdir("energy_plots"); outfile.cd("energy_plots");
     if (physics.GetEnergyVsModuleHist()) physics.GetEnergyVsModuleHist()->Write();
@@ -506,6 +580,8 @@ int main(int argc, char *argv[])
     h2_energy_theta_ep_ee->Write();
     merged->h2_ep_E_angle->Write();
     merged->h2_ee_E_angle->Write();
+    merged->h2_ep_E_angle_hc->Write();
+    merged->h2_ee_E_angle_hc->Write();
 
     outfile.cd();
     outfile.mkdir("physics_yields"); outfile.cd("physics_yields");
@@ -574,17 +650,34 @@ static std::string makeDefaultOutput(const std::string &input_path)
 }
 
 float fitAndDraw(TH1F* hist, const std::string& out_path, const float fit_range){
-    TCanvas *c = new TCanvas("", "", 800, 600);
-    float mean = hist->GetBinCenter(hist->GetMaximumBin());
-    hist->Fit("gaus", "rq", "", mean-fit_range, mean+fit_range);
-    hist->Draw();
-    TLatex *latex = new TLatex();
-    latex->SetNDC();
-    latex->SetTextSize(0.04);
-    latex->DrawLatex(0.15, 0.85, Form("%.2f mm +- %.2f mm", hist->GetFunction("gaus")->GetParameter(1), hist->GetFunction("gaus")->GetParError(1)));
-    fs::create_directories(fs::path(out_path).parent_path());
-    c->SaveAs((out_path + ".png").c_str());
-    delete c;
+    if (!hist) {
+        std::cerr << "Cannot fit a null histogram for " << out_path << "\n";
+        return std::numeric_limits<float>::quiet_NaN();
+    }
 
-    return hist->GetFunction("gaus")->GetParameter(1);
+    TCanvas c("", "", 800, 600);
+    const float peak = hist->GetBinCenter(hist->GetMaximumBin());
+    int fit_status = -1;
+    if (hist->GetEntries() > 0)
+        fit_status = hist->Fit("gaus", "rq", "", peak-fit_range, peak+fit_range);
+    TF1 *gaus = hist->GetFunction("gaus");
+    const bool fit_succeeded = fit_status == 0 && gaus;
+
+    hist->Draw();
+    TLatex latex;
+    latex.SetNDC();
+    latex.SetTextSize(0.04);
+    if (fit_succeeded) {
+        latex.DrawLatex(0.15, 0.85,
+            Form("%.2f mm +- %.2f mm", gaus->GetParameter(1), gaus->GetParError(1)));
+    } else {
+        latex.DrawLatex(0.15, 0.85, "Gaussian fit failed");
+        std::cerr << "Gaussian fit failed for " << hist->GetName()
+                  << " (status " << fit_status << "); using peak position "
+                  << peak << " mm\n";
+    }
+    fs::create_directories(fs::path(out_path).parent_path());
+    c.SaveAs((out_path + ".png").c_str());
+
+    return fit_succeeded ? gaus->GetParameter(1) : peak;
 }
