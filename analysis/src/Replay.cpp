@@ -1368,7 +1368,7 @@ bool Replay::ProcessWithReconX17(const std::string &input_evio, const std::strin
             bool is_sum      = (ev->trigger_bits & prad2::TBIT_sum)   != 0;
             bool is_lms      = (ev->trigger_bits & prad2::TBIT_lms)   != 0;
             bool is_alpha    = (ev->trigger_bits & prad2::TBIT_alpha) != 0;
-            if (!is_1cluster && !is_2cluster && !is_3cluster && !is_lms && !is_alpha) continue;
+            if (!is_sum && !is_1cluster && !is_2cluster && !is_3cluster && !is_lms && !is_alpha) continue;
 
             //For X17 blind analysis, keep all the 1/2 cluster events for calibration and monotoring,
             // but only keep 3 cluster events with event_num end with 8 (lucky number decided by students)
@@ -1443,7 +1443,7 @@ bool Replay::ProcessWithReconX17(const std::string &input_evio, const std::strin
                             else continue;
                         }
 
-                        if(is_1cluster || is_2cluster || is_3cluster) {
+                        if(is_sum || is_1cluster || is_2cluster || is_3cluster) {
                             const auto *mod = hycal.module_by_daq(crate, s, c);
                             if (!mod || !mod->is_hycal()) continue;
                             // Per-ID gain correction: average of LMS 2/3 channels.
