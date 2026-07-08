@@ -239,7 +239,7 @@ in-memory cache. The newest configured runs are then redrawn in:
 | **evio skip** | Sampling factor for remote EVIO splits. `0` keeps every eligible split; `N` keeps one split and skips the next `N`. |
 | **max evio** | Maximum number of files copied in one scan for each run. Default: 10. |
 | **queue cap** | Maximum pending EVIO files across the download and replay-queue trees. Downloads pause at this limit. Default: 100. |
-| **runs shown** | Number of latest runs loaded and displayed together. Default: 5. |
+| **runs shown** | Number of latest runs with gain output loaded and displayed together. Run-number gaps do not count. Default: 5. |
 | **threads** | Requested C++ replay threads. The GUI may cap this to the CPUs available after reserving resources for the viewer/download work. |
 
 Changing **batch** affects the next back-end recomputation. Existing
@@ -252,6 +252,7 @@ downloading or replaying EVIO again.
 |---|---|
 | **ref run** | Reference-gain run passed as `-r`. `auto` (`-1`) uses `gain_ref_run` from `runinfo/general.json`. |
 | **Ref File** | Select an explicit reference gain `.dat` file. This takes precedence over **ref run** and is passed with `-R`. |
+| **start run** / **end run** | Inclusive display range populated from run numbers found in the opened gain folder. Runs without gain output are absent from the lists. |
 | **quantity** | Select the value shown by the map and selected-module chart; definitions are below. |
 | **map range** | Symmetric display range around 1 for gain ratios, or around 0 for change quantities. This changes colours/axes only, not calculations. |
 | **drop warn** | Show a warning when the latest short-term gain change of a W module is below the negative threshold. `0%` disables warnings. |
@@ -340,6 +341,13 @@ The strip above the charts reports:
 - average across all visible runs.
 
 It follows the currently selected quantity and reference choice.
+
+### Central gain summary
+
+The three-line box above the charts lists per-module `gain / reference gain`
+averages over the latest five visible batches. Rows cover the modules under
+the central absorber, the first open ring, and the second open ring; finite
+values within each row are sorted from smallest to largest and omit module names.
 
 ### Log and status
 
@@ -478,4 +486,3 @@ Successful queued EVIO snapshots are deleted, but `_lms.root` files are
 deliberately persistent because they make future recomputation cheap.
 Archive or remove old run directories under `<storage>/lms/` only when
 they are no longer needed.
-

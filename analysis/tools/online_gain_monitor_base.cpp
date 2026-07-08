@@ -217,6 +217,11 @@ int main(int argc, char *argv[])
                 todo.push_back(evio);
         }
     }
+    // Do not construct idle Replay workers. Replay setup is relatively heavy,
+    // and only todo.size() workers can make progress at the same time. The -j
+    // value remains the configured upper bound.
+    if (!todo.empty())
+        num_threads = std::max(1, std::min(num_threads, static_cast<int>(todo.size())));
 
     std::cout << (reanalyze_only
                   ? "=== Re-analyze existing LMS files ===\n"

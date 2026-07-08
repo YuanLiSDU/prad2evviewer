@@ -101,7 +101,7 @@
             },
             "// 25560 is the reference run for the 1st X17 calibration": "",
             "// reuse PRad2 calibration, the ref_gain run is 24827": "",
-            "matching":    {"radius": 15.0, "use_square_cut": false, "energy_dependent": false, "sigma": 5.0}
+            "matching":    {"radius": 15.0, "use_square_cut": false, "energy_dependent": true, "sigma": 6.0}
         }
     ],
 
