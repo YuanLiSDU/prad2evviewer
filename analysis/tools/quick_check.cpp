@@ -548,51 +548,51 @@ static bool processFile(const std::string &path,
                 }
             }
 
-            if (mollerData_event.empty()) continue;
+            if (!mollerData_event.empty()) {
+                if (mollerData_event.size() > 1) {
+                    auto getPt = [](const MollerEvent &mev) -> float {
+                        float sin_t1 = std::sqrt(mev.first.x*mev.first.x + mev.first.y*mev.first.y)
+                                    / std::sqrt(mev.first.z*mev.first.z + mev.first.x*mev.first.x + mev.first.y*mev.first.y);
+                        float sin_t2 = std::sqrt(mev.second.x*mev.second.x + mev.second.y*mev.second.y)
+                                    / std::sqrt(mev.second.z*mev.second.z + mev.second.x*mev.second.x + mev.second.y*mev.second.y);
+                        return std::fabs(mev.first.E * sin_t1 - mev.second.E * sin_t2);
+                    };
+                    auto best = std::min_element(
+                        mollerData_event.begin(), mollerData_event.end(),
+                        [&](const MollerEvent &a, const MollerEvent &b) {
+                            return getPt(a) < getPt(b);
+                        });
+                    MollerEvent bestPair = *best;
+                    mollerData_event.clear();
+                    mollerData_event.push_back(bestPair);
+                }
 
-            if (mollerData_event.size() > 1) {
-                auto getPt = [](const MollerEvent &mev) -> float {
-                    float sin_t1 = std::sqrt(mev.first.x*mev.first.x + mev.first.y*mev.first.y)
-                                / std::sqrt(mev.first.z*mev.first.z + mev.first.x*mev.first.x + mev.first.y*mev.first.y);
-                    float sin_t2 = std::sqrt(mev.second.x*mev.second.x + mev.second.y*mev.second.y)
-                                / std::sqrt(mev.second.z*mev.second.z + mev.second.x*mev.second.x + mev.second.y*mev.second.y);
-                    return std::fabs(mev.first.E * sin_t1 - mev.second.E * sin_t2);
-                };
-                auto best = std::min_element(
-                    mollerData_event.begin(), mollerData_event.end(),
-                    [&](const MollerEvent &a, const MollerEvent &b) {
-                        return getPt(a) < getPt(b);
-                    });
-                MollerEvent bestPair = *best;
-                mollerData_event.clear();
-                mollerData_event.push_back(bestPair);
-            }
+                MollerEvent &mev = mollerData_event.front();
+                out.mollers.push_back(mev);
 
-            MollerEvent &mev = mollerData_event.front();
-            out.mollers.push_back(mev);
+                float t1 = std::atan2(std::sqrt(mev.first.x*mev.first.x + mev.first.y*mev.first.y),
+                                    mev.first.z) * 180.f / M_PI;
+                float t2 = std::atan2(std::sqrt(mev.second.x*mev.second.x + mev.second.y*mev.second.y),
+                                    mev.second.z) * 180.f / M_PI;
+                out.h2_ee_hits->Fill(mev.first.x, mev.first.y);
+                out.h2_ee_hits->Fill(mev.second.x, mev.second.y);
+                out.h2_ee_E_angle->Fill(t1, mev.first.E);
+                out.h2_ee_E_angle->Fill(t2, mev.second.E);
+                out.h_ee_yield->Fill(t1);
+                out.h_ee_yield->Fill(t2);
 
-            float t1 = std::atan2(std::sqrt(mev.first.x*mev.first.x + mev.first.y*mev.first.y),
-                                mev.first.z) * 180.f / M_PI;
-            float t2 = std::atan2(std::sqrt(mev.second.x*mev.second.x + mev.second.y*mev.second.y),
-                                mev.second.z) * 180.f / M_PI;
-            out.h2_ee_hits->Fill(mev.first.x, mev.first.y);
-            out.h2_ee_hits->Fill(mev.second.x, mev.second.y);
-            out.h2_ee_E_angle->Fill(t1, mev.first.E);
-            out.h2_ee_E_angle->Fill(t2, mev.second.E);
-            out.h_ee_yield->Fill(t1);
-            out.h_ee_yield->Fill(t2);
+                float vertex = physics.GetMollerZdistance(mev, Ebeam);
+                out.h_ee_vertex_z->Fill(vertex);
 
-            float vertex = physics.GetMollerZdistance(mev, Ebeam);
-            out.h_ee_vertex_z->Fill(vertex);
-
-            if (out.mollers.size() > 1) {
-                auto center = physics.GetMollerCenter(out.mollers[out.mollers.size() - 2], mev);
-                out.h_ee_center_x->Fill(center[0]);
-                out.h_ee_center_y->Fill(center[1]);
-                if (out.mollers.size() > 2) {
-                    auto center2 = physics.GetMollerCenter(out.mollers[out.mollers.size() - 3], mev);
-                    out.h_ee_center_x->Fill(center2[0]);
-                    out.h_ee_center_y->Fill(center2[1]);
+                if (out.mollers.size() > 1) {
+                    auto center = physics.GetMollerCenter(out.mollers[out.mollers.size() - 2], mev);
+                    out.h_ee_center_x->Fill(center[0]);
+                    out.h_ee_center_y->Fill(center[1]);
+                    if (out.mollers.size() > 2) {
+                        auto center2 = physics.GetMollerCenter(out.mollers[out.mollers.size() - 3], mev);
+                        out.h_ee_center_x->Fill(center2[0]);
+                        out.h_ee_center_y->Fill(center2[1]);
+                    }
                 }
             }
         }

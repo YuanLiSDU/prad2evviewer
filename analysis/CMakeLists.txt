@@ -32,7 +32,7 @@ target_include_directories(prad2ana
 
 target_link_libraries(prad2ana PUBLIC
     prad2dec prad2det nlohmann_json::nlohmann_json
-    ROOT::Core ROOT::Tree ROOT::RIO ROOT::Hist ROOT::Graf ROOT::Gpad ROOT::Spectrum)
+    ROOT::Core ROOT::Tree ROOT::TreePlayer ROOT::RIO ROOT::Hist ROOT::Graf ROOT::Gpad ROOT::Spectrum)
 
 set(ANA_DEPS prad2ana)   # tools just link the lib; transitives flow through
 
@@ -66,6 +66,7 @@ add_analysis_tool(gain_monitor tools/gain_monitor.cpp)
 add_analysis_tool(gain_fitter tools/gain_fitter.cpp)
 add_analysis_tool(refGain_produce tools/refGain_produce.cpp)
 add_analysis_tool(sim2replay tools/sim2replay.cpp)
+add_analysis_tool(sim2replay_hc tools/sim2replay_hc.cpp)
 add_analysis_tool(cosmic_lg tools/cosmic_lg.cpp)
 add_analysis_tool(hycal_rf_offset_calib tools/hycal_rf_offset_calib.cpp)
 add_analysis_tool(nonlinearity tools/nonlinearity.cpp)
@@ -73,7 +74,7 @@ add_analysis_tool(calib_5by5 tools/calib_5by5.cpp)
 
 install(TARGETS replay_rawdata replay_gainCorr online_gain_monitor_base replay_recon replay_filter replay_add_hv
                 live_charge epCalib
-                cosmic_test quick_check matching det_calib cosmic_lg sim2replay
+                cosmic_test quick_check matching det_calib cosmic_lg sim2replay sim2replay_hc
                 gain_monitor gain_fitter refGain_produce
                 hycal_rf_offset_calib nonlinearity calib_5by5
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
