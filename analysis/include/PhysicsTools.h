@@ -145,14 +145,15 @@ public:
     // Get the center of the Moller distribution in x-y space
     // enter two moller events, find the intersection of 2 lines
     // output the x-y coordinates of the center for every 2 moller events
-    std::array<float, 2> GetMollerCenter( MollerEvent &event1, MollerEvent &event2);
+    static std::array<float, 2> GetMollerCenter(const MollerEvent &event1,
+                                                const MollerEvent &event2);
 
-    float GetMollerZdistance(MollerEvent &event, float Ebeam);
+    static float GetMollerZdistance(const MollerEvent &event, float Ebeam);
 
     //Get azimuthal angle difference(should be around 180 degrees) of the Moller event
-    float GetMollerPhiDiff(MollerEvent &event1);
+    static float GetMollerPhiDiff(const MollerEvent &event1);
 
-    float GetPhiAngle(float x, float y);
+    static float GetPhiAngle(float x, float y);
 
     void FillMollerPhiDiff(float phi_diff) { if (moller_phi_diff_) moller_phi_diff_->Fill(phi_diff); }
     void FillMollerXY(float x, float y) { if (moller_x_) moller_x_->Fill(x); if (moller_y_) moller_y_->Fill(y); }

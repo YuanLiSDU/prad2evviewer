@@ -345,7 +345,8 @@ bool PhysicsTools::isMoller_kinematic(float theta_deg1, float energy1, float the
     return E_sum && E1_ok && E2_ok;
 }
 
-std::array<float, 2> PhysicsTools::GetMollerCenter(MollerEvent &event1, MollerEvent &event2)
+std::array<float, 2> PhysicsTools::GetMollerCenter(const MollerEvent &event1,
+                                                   const MollerEvent &event2)
 {
     float x1[2], y1[2];
     float x2[2], y2[2];
@@ -376,7 +377,7 @@ std::array<float, 2> PhysicsTools::GetMollerCenter(MollerEvent &event1, MollerEv
 
 }
 
-float PhysicsTools::GetMollerZdistance(MollerEvent &event, float Ebeam)
+float PhysicsTools::GetMollerZdistance(const MollerEvent &event, float Ebeam)
 {
     float R1 = sqrt(event.first.x*event.first.x + event.first.y*event.first.y);
     float R2 = sqrt(event.second.x*event.second.x + event.second.y*event.second.y);
@@ -384,7 +385,7 @@ float PhysicsTools::GetMollerZdistance(MollerEvent &event, float Ebeam)
     return z;
 }
 
-float PhysicsTools::GetMollerPhiDiff(MollerEvent &event1)
+float PhysicsTools::GetMollerPhiDiff(const MollerEvent &event1)
 {
     // Calculate the azimuthal angle difference (phi) for a Moller event
     float x1 = event1.first.x, y1 = event1.first.y;
