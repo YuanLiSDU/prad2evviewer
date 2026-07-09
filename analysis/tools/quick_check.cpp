@@ -608,6 +608,9 @@ static bool processFile(const std::string &path,
 
                 float t1 = ev.cl_time[0], t2 = ev.cl_time[1], t3 = ev.cl_time[2];
 
+                if(ev.cl_nblocks[0] < 2 || ev.cl_nblocks[1] < 2 || ev.cl_nblocks[2] < 2)
+                    continue;
+
                 float theta1 = std::atan2(std::sqrt(x1*x1 + y1*y1), z1) * 180.f / M_PI;
                 float theta2 = std::atan2(std::sqrt(x2*x2 + y2*y2), z2) * 180.f / M_PI;
                 float theta3 = std::atan2(std::sqrt(x3*x3 + y3*y3), z3) * 180.f / M_PI;
@@ -696,6 +699,8 @@ static bool processFile(const std::string &path,
                 if ((ev.matchFlag[j] & 1u << 1) != 0) gem[1] = true;
                 if ((ev.matchFlag[j] & 1u << 2) != 0) gem[2] = true;
                 if ((ev.matchFlag[j] & 1u << 3) != 0) gem[3] = true;
+
+                if(ev.cl_nblocks[j] < 2) continue;
 
                 if ( (gem[0] || gem[1]) && (gem[2] || gem[3]) ){ 
                     gem_matched_count++;
