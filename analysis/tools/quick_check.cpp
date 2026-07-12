@@ -1091,6 +1091,7 @@ int main(int argc, char *argv[])
     merged->h_3cl_cluster_num->Write();
     merged->h_3cl_ptx->Write();
     merged->h_3cl_pty->Write();
+    merged->h2_3cl_Pt->Write();
 
     outfile.cd();
     outfile.mkdir("x17_cut"); outfile.cd("x17_cut");
@@ -1102,6 +1103,7 @@ int main(int argc, char *argv[])
     merged->h_3cl_mass_cut->Write();
     merged->h_3cl_ptx_cut->Write();
     merged->h_3cl_pty_cut->Write();
+    merged->h2_3cl_Pt_cut->Write();
 
     outfile.cd();
     outfile.mkdir("x17_gem"); outfile.cd("x17_gem");
@@ -1114,6 +1116,7 @@ int main(int argc, char *argv[])
     merged->h_3cl_mass_gem->Write();
     merged->h_3cl_ptx_gem->Write();
     merged->h_3cl_pty_gem->Write();
+    merged->h2_3cl_Pt_gem->Write();
 
     outfile.cd();
     outfile.mkdir("x17_gem_cut"); outfile.cd("x17_gem_cut");
@@ -1125,6 +1128,7 @@ int main(int argc, char *argv[])
     merged->h_3cl_mass_gem_cut->Write();
     merged->h_3cl_ptx_gem_cut->Write();
     merged->h_3cl_pty_gem_cut->Write();
+    merged->h2_3cl_Pt_gem_cut->Write();
 
     outfile.cd("moller_analysis");
     physics.FillNeventsModuleMap();
