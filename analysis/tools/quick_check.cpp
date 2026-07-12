@@ -152,6 +152,7 @@ struct QuickResult {
     std::unique_ptr<TH1F> h_3cl_cluster_num;
     std::unique_ptr<TH1F> h_3cl_ptx;
     std::unique_ptr<TH1F> h_3cl_pty;
+    std::unique_ptr<TH2F> h2_3cl_Pt;
 
     std::unique_ptr<TH1F> h_3cl_totalE_cut;
     std::unique_ptr<TH2F> h2_3cl_hits_cut;
@@ -161,6 +162,7 @@ struct QuickResult {
     std::unique_ptr<TH1F> h_3cl_mass_cut;
     std::unique_ptr<TH1F> h_3cl_ptx_cut;
     std::unique_ptr<TH1F> h_3cl_pty_cut;
+    std::unique_ptr<TH2F> h2_3cl_Pt_cut;
 
     std::unique_ptr<TH1F> h_3cl_cluster_gem_num;
     std::unique_ptr<TH1F> h_3cl_totalE_gem;
@@ -171,6 +173,7 @@ struct QuickResult {
     std::unique_ptr<TH1F> h_3cl_mass_gem;
     std::unique_ptr<TH1F> h_3cl_ptx_gem;
     std::unique_ptr<TH1F> h_3cl_pty_gem;
+    std::unique_ptr<TH2F> h2_3cl_Pt_gem;
 
     std::unique_ptr<TH1F> h_3cl_totalE_gem_cut;
     std::unique_ptr<TH2F> h2_3cl_hits_gem_cut;
@@ -180,6 +183,7 @@ struct QuickResult {
     std::unique_ptr<TH1F> h_3cl_mass_gem_cut;
     std::unique_ptr<TH1F> h_3cl_ptx_gem_cut;
     std::unique_ptr<TH1F> h_3cl_pty_gem_cut;
+    std::unique_ptr<TH2F> h2_3cl_Pt_gem_cut;
 };
 
 static void detach(TH1 *h)
@@ -265,6 +269,8 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
         "3-Cluster Ptx;Ptx (MeV);Counts", 200, -50, 50);
     r->h_3cl_pty = std::make_unique<TH1F>("3cl_pty",
         "3-Cluster Pty;Pty (MeV);Counts", 200, -50, 50);
+    r->h2_3cl_Pt = std::make_unique<TH2F>("3cl_Pt",
+        "3-Cluster Pt hycal;Ptx (MeV);Pty (MeV)", 400, -50, 50, 400, -50, 50);
 
     r->h2_3cl_hits_cut = std::make_unique<TH2F>("3cl_hits_cut",
         "3-Cluster Hit positions hycal - Cut;X (mm);Y (mm)", 720, -360, 360, 720, -360, 360);
@@ -282,6 +288,8 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
         "3-Cluster Ptx - Cut;Ptx (MeV);Counts", 200, -50, 50);
     r->h_3cl_pty_cut = std::make_unique<TH1F>("3cl_pty_cut",
         "3-Cluster Pty - Cut;Pty (MeV);Counts", 200, -50, 50);
+    r->h2_3cl_Pt_cut = std::make_unique<TH2F>("3cl_Pt_cut",
+        "3-Cluster Pt hycal - Cut;Ptx (MeV);Pty (MeV)", 400, -50, 50, 400, -50, 50);
 
     // use gem matching to cut the 3-cluster events
     r->h_3cl_cluster_gem_num = std::make_unique<TH1F>( "3cl_cluster_gem_num",
@@ -302,6 +310,8 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
         "3-Cluster Ptx with GEM matching;Ptx (MeV);Counts", 200, -50, 50);
     r->h_3cl_pty_gem = std::make_unique<TH1F>("3cl_pty_gem",
         "3-Cluster Pty with GEM matching;Pty (MeV);Counts", 200, -50, 50);
+    r->h2_3cl_Pt_gem = std::make_unique<TH2F>("3cl_Pt_gem",
+        "3-Cluster Pt hycal with GEM matching;Ptx (MeV);Pty (MeV)", 400, -50, 50, 400, -50, 50);
 
     r->h2_3cl_hits_gem_cut = std::make_unique<TH2F>("3cl_hits_gem_cut",
         "3-Cluster Hit positions with GEM matching - Cut;X (mm);Y (mm)", 720, -360, 360, 720, -360, 360);
@@ -319,6 +329,8 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
         "3-Cluster Ptx with GEM matching - Cut;Ptx (MeV);Counts", 200, -50, 50);
     r->h_3cl_pty_gem_cut = std::make_unique<TH1F>("3cl_pty_gem_cut",
         "3-Cluster Pty with GEM matching - Cut;Pty (MeV);Counts", 200, -50, 50);
+    r->h2_3cl_Pt_gem_cut = std::make_unique<TH2F>("3cl_Pt_gem_cut",
+        "3-Cluster Pt hycal with GEM matching - Cut;Ptx (MeV);Pty (MeV)", 400, -50, 50, 400, -50, 50);
 
     detach(r->hit_pos.get());
     detach(r->h_1cl.get());
@@ -355,6 +367,7 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     detach(r->h_3cl_cluster_num.get());
     detach(r->h_3cl_ptx.get());
     detach(r->h_3cl_pty.get());
+    detach(r->h2_3cl_Pt.get());
 
     detach(r->h2_3cl_hits_cut.get());
     detach(r->h2_3cl_E_angle_cut.get());
@@ -364,6 +377,7 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     detach(r->h_3cl_mass_cut.get());
     detach(r->h_3cl_ptx_cut.get());
     detach(r->h_3cl_pty_cut.get());
+    detach(r->h2_3cl_Pt_cut.get());
     
     detach(r->h_3cl_cluster_gem_num.get());
     detach(r->h2_3cl_hits_gem.get());
@@ -374,6 +388,7 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     detach(r->h_3cl_mass_gem.get());
     detach(r->h_3cl_ptx_gem.get());
     detach(r->h_3cl_pty_gem.get());
+    detach(r->h2_3cl_Pt_gem.get());
     detach(r->h2_3cl_hits_gem_cut.get());
     detach(r->h2_3cl_E_angle_gem_cut.get());
     detach(r->h_3cl_E_gem_cut.get());
@@ -382,6 +397,7 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     detach(r->h_3cl_mass_gem_cut.get());
     detach(r->h_3cl_ptx_gem_cut.get());
     detach(r->h_3cl_pty_gem_cut.get());
+    detach(r->h2_3cl_Pt_gem_cut.get());
     return r;
 }
 
@@ -651,6 +667,7 @@ static bool processFile(const std::string &path,
                 out.h_3cl_totalE->Fill(E1 + E2 + E3);
                 out.h_3cl_ptx->Fill(ptx);
                 out.h_3cl_pty->Fill(pty);
+                out.h2_3cl_Pt->Fill(ptx, pty);
                 out.h_3cl_E->Fill(E1);
                 out.h_3cl_E->Fill(E2);
                 out.h_3cl_E->Fill(E3);
@@ -671,6 +688,7 @@ static bool processFile(const std::string &path,
                     out.h_3cl_totalE_cut->Fill(E1 + E2 + E3);
                     out.h_3cl_ptx_cut->Fill(ptx);
                     out.h_3cl_pty_cut->Fill(pty);
+                    out.h2_3cl_Pt_cut->Fill(ptx, pty);
                     out.h_3cl_E_cut->Fill(E1);
                     out.h_3cl_E_cut->Fill(E2);
                     out.h_3cl_E_cut->Fill(E3);
@@ -774,6 +792,7 @@ static bool processFile(const std::string &path,
                 out.h_3cl_totalE_gem->Fill(E1 + E2 + E3);
                 out.h_3cl_ptx_gem->Fill(ptx);
                 out.h_3cl_pty_gem->Fill(pty);
+                out.h2_3cl_Pt_gem->Fill(ptx, pty);
                 out.h_3cl_E_gem->Fill(E1);
                 out.h_3cl_E_gem->Fill(E2);
                 out.h_3cl_E_gem->Fill(E3);
@@ -794,6 +813,7 @@ static bool processFile(const std::string &path,
                     out.h_3cl_totalE_gem_cut->Fill(E1 + E2 + E3);
                     out.h_3cl_ptx_gem_cut->Fill(ptx);
                     out.h_3cl_pty_gem_cut->Fill(pty);
+                    out.h2_3cl_Pt_gem_cut->Fill(ptx, pty);
                     out.h_3cl_E_gem_cut->Fill(E1);
                     out.h_3cl_E_gem_cut->Fill(E2);
                     out.h_3cl_E_gem_cut->Fill(E3);
@@ -853,6 +873,7 @@ static void mergeResult(QuickResult &dst, const QuickResult &src, fdec::HyCalSys
     dst.h_3cl_cluster_num->Add(src.h_3cl_cluster_num.get());
     dst.h_3cl_ptx->Add(src.h_3cl_ptx.get());
     dst.h_3cl_pty->Add(src.h_3cl_pty.get());
+    dst.h2_3cl_Pt->Add(src.h2_3cl_Pt.get());
 
     dst.h_3cl_totalE_cut->Add(src.h_3cl_totalE_cut.get());
     dst.h2_3cl_hits_cut->Add(src.h2_3cl_hits_cut.get());
@@ -862,6 +883,7 @@ static void mergeResult(QuickResult &dst, const QuickResult &src, fdec::HyCalSys
     dst.h_3cl_mass_cut->Add(src.h_3cl_mass_cut.get());
     dst.h_3cl_ptx_cut->Add(src.h_3cl_ptx_cut.get());
     dst.h_3cl_pty_cut->Add(src.h_3cl_pty_cut.get());
+    dst.h2_3cl_Pt_cut->Add(src.h2_3cl_Pt_cut.get());
 
     // X17 three-cluster histograms with GEM matching.
     dst.h_3cl_cluster_gem_num->Add(src.h_3cl_cluster_gem_num.get());
@@ -873,6 +895,7 @@ static void mergeResult(QuickResult &dst, const QuickResult &src, fdec::HyCalSys
     dst.h_3cl_mass_gem->Add(src.h_3cl_mass_gem.get());
     dst.h_3cl_ptx_gem->Add(src.h_3cl_ptx_gem.get());
     dst.h_3cl_pty_gem->Add(src.h_3cl_pty_gem.get());
+    dst.h2_3cl_Pt_gem->Add(src.h2_3cl_Pt_gem.get());
 
     dst.h_3cl_totalE_gem_cut->Add(src.h_3cl_totalE_gem_cut.get());
     dst.h2_3cl_hits_gem_cut->Add(src.h2_3cl_hits_gem_cut.get());
@@ -882,6 +905,7 @@ static void mergeResult(QuickResult &dst, const QuickResult &src, fdec::HyCalSys
     dst.h_3cl_mass_gem_cut->Add(src.h_3cl_mass_gem_cut.get());
     dst.h_3cl_ptx_gem_cut->Add(src.h_3cl_ptx_gem_cut.get());
     dst.h_3cl_pty_gem_cut->Add(src.h_3cl_pty_gem_cut.get());
+    dst.h2_3cl_Pt_gem_cut->Add(src.h2_3cl_Pt_gem_cut.get());
 
     dst.physics->GetEnergyVsModuleHist()->Add(src.physics->GetEnergyVsModuleHist());
     dst.physics->GetEnergyVsThetaHist()->Add(src.physics->GetEnergyVsThetaHist());
