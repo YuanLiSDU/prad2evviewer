@@ -58,7 +58,7 @@ constexpr float kVtpSeedEnergyMinMeV = 40.f;
 constexpr float kVtpSeedEnergyMaxMeV = 10000.f;
 constexpr float kVtpTotalEnergyMinMeV = 70.f;
 constexpr float kVtpTotalEnergyMaxMeV = 1600.f;
-constexpr float kVtpModuleFiredMinEnergyMeV = 5.f;
+constexpr float kVtpModuleFiredMinEnergyMeV = 8.f;
 constexpr int kVtpBlocksMin = 2;
 constexpr int kVtpBlocksMax = 9;
 constexpr bool kVtpRejectCenter4x4Seeds = true;
@@ -67,14 +67,19 @@ constexpr double kVtpCenter4x4AbsYMaxMm = 41.6;
 
 // Simulated trigger-bit emulation.  Bit numbers match database/trigger_bits.json.
 constexpr float kTriggerRawSumTotalEnergyMinMeV = 900.f;
-constexpr float kTrigger3ClusterTotalEnergyMinMeV = 900.f;
-constexpr float kTrigger3ClusterTotalEnergyMaxMeV = 1900.f;
+constexpr float kTrigger3ClusterTotalEnergyMinMeV = 1100.f;
+constexpr float kTrigger3ClusterTotalEnergyMaxMeV = 10000.f;
 constexpr int kTrigger3ClusterMinClusters = 3;
 
 // Smear reconstructed HyCal cluster energy.  Resolution = a / sqrt(E[GeV]).
 constexpr bool kHyCalSmearClusterEnergy = true;
 constexpr float kHyCalClusterEnergyResolutionA = 0.03f;
 constexpr unsigned kHyCalSmearSeed = 12345u;
+
+// G4 DID is built from volume copy numbers:
+// layer0 L/R -> 0/1, layer1 L/R -> 2/3.  Replay/general.json uses
+// downstream R/L -> 0/1 and upstream R/L -> 2/3.
+constexpr int kG4GemDidToReplayDetId[4] = {3, 2, 1, 0};
 
 struct ModuleTableRow {
     int input_index = -1;
@@ -441,6 +446,13 @@ float smearHyCalClusterEnergy(float energy_mev, std::mt19937 &rng)
     return std::max(0.f, gaussian(rng));
 }
 
+int replayGemDetId(int g4_did)
+{
+    if (g4_did < 0 || g4_did >= 4)
+        return -1;
+    return kG4GemDidToReplayDetId[g4_did];
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -545,7 +557,12 @@ int main(int argc, char *argv[])
               << "[setup] HC E smear    : "
               << (kHyCalSmearClusterEnergy ? "on" : "off")
               << " sigma/E=" << kHyCalClusterEnergyResolutionA
-              << "/sqrt(E_GeV), seed=" << kHyCalSmearSeed << "\n";
+              << "/sqrt(E_GeV), seed=" << kHyCalSmearSeed << "\n"
+              << "[setup] GEM DID map   : G4 0,1,2,3 -> replay "
+              << kG4GemDidToReplayDetId[0] << ","
+              << kG4GemDidToReplayDetId[1] << ","
+              << kG4GemDidToReplayDetId[2] << ","
+              << kG4GemDidToReplayDetId[3] << "\n";
 
     TChain chain("T");
     for (const auto &file : input_files) {
@@ -683,8 +700,8 @@ int main(int argc, char *argv[])
         for (Long64_t i = 0; i < n_gem_arrays; ++i) {
             if (gem_edep[i] <= kGemEdepMinMeV)
                 continue;
-            const int did = gem_did[i];
-            if (did < 0 || did >= 4)
+            const int did = replayGemDetId(gem_did[i]);
+            if (did < 0)
                 continue;
             if (ev->n_gem_hits >= prad2::kMaxGemHits)
                 break;
