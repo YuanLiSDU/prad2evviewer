@@ -32,6 +32,7 @@
 #include <TROOT.h>
 
 #include <iostream>
+#include <array>
 #include <string>
 #include <vector>
 #include <cmath>
@@ -96,6 +97,78 @@ static float electronPairInvariantMass(
     const float pz = momentum[0][2] + momentum[1][2];
     const float mass2 = total_energy * total_energy - px * px - py * py - pz * pz;
     return std::sqrt(std::max(0.f, mass2));
+}
+
+struct GEMTrackPair {
+    float xu, yu, zu;
+    float xd, yd, zd;
+};
+
+static bool solveGEMVertex(const GEMTrackPair tracks[3], std::array<float, 3> &vertex)
+{
+    float A[3][3] = {};
+    float b[3] = {};
+
+    for (int i = 0; i < 3; ++i) {
+        const float dx = tracks[i].xd - tracks[i].xu;
+        const float dy = tracks[i].yd - tracks[i].yu;
+        const float dz = tracks[i].zd - tracks[i].zu;
+        const float norm = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (norm <= 0.f)
+            return false;
+
+        const float ux = dx / norm;
+        const float uy = dy / norm;
+        const float uz = dz / norm;
+        const float p0[3] = {tracks[i].xu, tracks[i].yu, tracks[i].zu};
+
+        const float P[3][3] = {
+            {1.f - ux * ux,     -ux * uy,        -ux * uz},
+            {    -uy * ux, 1.f - uy * uy,        -uy * uz},
+            {    -uz * ux,     -uz * uy,    1.f - uz * uz}
+        };
+
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c)
+                A[r][c] += P[r][c];
+            b[r] += P[r][0] * p0[0] + P[r][1] * p0[1] + P[r][2] * p0[2];
+        }
+    }
+
+    float M[3][4] = {
+        {A[0][0], A[0][1], A[0][2], b[0]},
+        {A[1][0], A[1][1], A[1][2], b[1]},
+        {A[2][0], A[2][1], A[2][2], b[2]}
+    };
+
+    for (int col = 0; col < 3; ++col) {
+        int pivot = col;
+        for (int row = col + 1; row < 3; ++row) {
+            if (std::fabs(M[row][col]) > std::fabs(M[pivot][col]))
+                pivot = row;
+        }
+        if (std::fabs(M[pivot][col]) < 1e-6f)
+            return false;
+        if (pivot != col) {
+            for (int k = col; k < 4; ++k)
+                std::swap(M[col][k], M[pivot][k]);
+        }
+
+        const float inv = 1.f / M[col][col];
+        for (int k = col; k < 4; ++k)
+            M[col][k] *= inv;
+
+        for (int row = 0; row < 3; ++row) {
+            if (row == col)
+                continue;
+            const float factor = M[row][col];
+            for (int k = col; k < 4; ++k)
+                M[row][k] -= factor * M[col][k];
+        }
+    }
+
+    vertex = {M[0][3], M[1][3], M[2][3]};
+    return std::isfinite(vertex[0]) && std::isfinite(vertex[1]) && std::isfinite(vertex[2]);
 }
 
 static bool isMollerAngleEnergyMatch(const PhysicsTools &physics,
@@ -239,6 +312,9 @@ struct QuickResult {
     std::unique_ptr<TH1F> h_3cl_pty_gem_cut;
     std::unique_ptr<TH2F> h2_3cl_Pt_gem_cut;
     std::unique_ptr<TH1F> h_3cl_tDiff_gem_cut;
+    std::unique_ptr<TH1F> h_3cl_Vz_gem_cut;
+    std::unique_ptr<TH2F> h2_3cl_Vxy_gem_cut;
+
     //cut step by step
     std::unique_ptr<TH2F> h_3cl_Pt_totalE_cut;
     std::unique_ptr<TH2F> h_3cl_Pt_totalE_time_cut;
@@ -404,6 +480,10 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
         "3-Cluster Pt hycal with GEM matching - Cut;Ptx (MeV);Pty (MeV)", 400, -50, 50, 400, -50, 50);
     r->h_3cl_tDiff_gem_cut = std::make_unique<TH1F>("3cl_tDiff_gem_cut",
         "3-Cluster Time Difference with GEM matching - Cut;Time Difference (ns);Counts", 200, -50, 50);
+    r->h_3cl_Vz_gem_cut = std::make_unique<TH1F>("3cl_Vz_gem_cut",
+        "3-Cluster GEM Vertex Z with Cut;Z (mm);Counts", 14000, -5000, 9000);
+    r->h2_3cl_Vxy_gem_cut = std::make_unique<TH2F>("3cl_Vxy_gem_cut",
+        "3-Cluster GEM Vertex XY with Cut;X (mm);Y (mm)", 800, -40, 40, 800, -40, 40);
     // step by step cuts
     r->h_3cl_Pt_totalE_cut = std::make_unique<TH2F>("3cl_Pt_totalE_cut",
         "3-Cluster Pt with Total Energy Cut;Ptx (MeV);Pty (MeV)", 400, -50, 50, 400, -50, 50);
@@ -494,6 +574,8 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     detach(r->h_3cl_pty_gem_cut.get());
     detach(r->h2_3cl_Pt_gem_cut.get());
     detach(r->h_3cl_tDiff_gem_cut.get());
+    detach(r->h_3cl_Vz_gem_cut.get());
+    detach(r->h2_3cl_Vxy_gem_cut.get());
     detach(r->h_3cl_Pt_totalE_cut.get());
     detach(r->h_3cl_Pt_totalE_time_cut.get());
     detach(r->h_3cl_Pt_totalE_time_clusterE_cut.get());
@@ -832,6 +914,8 @@ static bool processFile(const std::string &path,
             //loop over all clusters for GEM matching
             int gem_matched_count = 0;
             float x1, y1, z1, x2, y2, z2, x3, y3, z3, E1, E2, E3, t1, t2, t3;
+            float x1u, y1u, z1u, x2u, y2u, z2u, x3u, y3u, z3u;
+            float x1d, y1d, z1d, x2d, y2d, z2d, x3d, y3d, z3d;
             int index1 = -1, index2 = -1, index3 = -1;
             for (int j = 0; j < ev.n_clusters; j++) {
                 bool gem[4] = {false, false, false, false}; // 0,1 downstream, 2,3 upstream, matched
@@ -847,19 +931,28 @@ static bool processFile(const std::string &path,
                     if(gem_matched_count == 1) {
                         int d;
                         if(gem[2]) d = 2; else d = 3;
-                        x1 = ev.matchGEMx[j][d], y1 = ev.matchGEMy[j][d], z1 = ev.matchGEMz[j][d], E1 = ev.cl_energy[j], t1 = ev.cl_time[j];
+                        x1u = ev.matchGEMx[j][d], y1u = ev.matchGEMy[j][d], z1u = ev.matchGEMz[j][d], E1 = ev.cl_energy[j], t1 = ev.cl_time[j];
+                        x1 = x1u, y1 = y1u, z1 = z1u;
+                        if(gem[0]) d = 0; else d = 1;
+                        x1d = ev.matchGEMx[j][d], y1d = ev.matchGEMy[j][d], z1d = ev.matchGEMz[j][d];
                         index1 = j;
                     }
                     if(gem_matched_count == 2) {
                         int d;
                         if(gem[2]) d = 2; else d = 3;
-                        x2 = ev.matchGEMx[j][d], y2 = ev.matchGEMy[j][d], z2 = ev.matchGEMz[j][d], E2 = ev.cl_energy[j], t2 = ev.cl_time[j];
+                        x2u = ev.matchGEMx[j][d], y2u = ev.matchGEMy[j][d], z2u = ev.matchGEMz[j][d], E2 = ev.cl_energy[j], t2 = ev.cl_time[j];
+                        x2 = x2u, y2 = y2u, z2 = z2u;
+                        if(gem[0]) d = 0; else d = 1;
+                        x2d = ev.matchGEMx[j][d], y2d = ev.matchGEMy[j][d], z2d = ev.matchGEMz[j][d];
                         index2 = j;
                     }
                     if(gem_matched_count == 3) {
                         int d;
                         if(gem[2]) d = 2; else d = 3;
-                        x3 = ev.matchGEMx[j][d], y3 = ev.matchGEMy[j][d], z3 = ev.matchGEMz[j][d], E3 = ev.cl_energy[j], t3 = ev.cl_time[j];
+                        x3u = ev.matchGEMx[j][d], y3u = ev.matchGEMy[j][d], z3u = ev.matchGEMz[j][d], E3 = ev.cl_energy[j], t3 = ev.cl_time[j];
+                        x3 = x3u, y3 = y3u, z3 = z3u;
+                        if(gem[0]) d = 0; else d = 1;
+                        x3d = ev.matchGEMx[j][d], y3d = ev.matchGEMy[j][d], z3d = ev.matchGEMz[j][d];
                         index3 = j;
                     }
                 }
@@ -883,6 +976,25 @@ static bool processFile(const std::string &path,
                 float theta1 = std::atan2(std::sqrt(x1*x1 + y1*y1), z1) * 180.f / M_PI;
                 float theta2 = std::atan2(std::sqrt(x2*x2 + y2*y2), z2) * 180.f / M_PI;
                 float theta3 = std::atan2(std::sqrt(x3*x3 + y3*y3), z3) * 180.f / M_PI;
+
+                const GEMTrackPair gem_tracks[3] = {
+                    {x1u, y1u, z1u, x1d, y1d, z1d},
+                    {x2u, y2u, z2u, x2d, y2d, z2d},
+                    {x3u, y3u, z3u, x3d, y3d, z3d}
+                };
+                std::array<float, 3> gem_vertex = {0.f, 0.f, 0.f};
+                const bool gem_vertex_ok = solveGEMVertex(gem_tracks, gem_vertex);
+                const float vx = gem_vertex_ok ? gem_vertex[0] : -999.f;
+                const float vy = gem_vertex_ok ? gem_vertex[1] : -999.f;
+                const float vz = gem_vertex_ok ? gem_vertex[2] : -9999.f;
+
+                auto rel_coord = [&](float x, float y, float z) {
+                    return std::array<float, 3>{x - vx, y - vy, z - vz};
+                };
+                auto theta_from_vertex = [&](float x, float y, float z) {
+                    const auto rel = rel_coord(x, y, z);
+                    return std::atan2(std::sqrt(rel[0] * rel[0] + rel[1] * rel[1]), rel[2]) * 180.f / M_PI;
+                };
 
                 float mass1 = electronPairInvariantMass(x1, y1, z1, E1, x2, y2, z2, E2);
                 float mass2 = electronPairInvariantMass(x1, y1, z1, E1, x3, y3, z3, E3);
@@ -983,6 +1095,8 @@ static bool processFile(const std::string &path,
                     out.h_3cl_ptx_gem_cut->Fill(ptx);
                     out.h_3cl_pty_gem_cut->Fill(pty);
                     out.h2_3cl_Pt_gem_cut->Fill(ptx, pty);
+                    out.h_3cl_Vz_gem_cut->Fill(vz);
+                    out.h2_3cl_Vxy_gem_cut->Fill(vx, vy);
                     out.h_3cl_E_gem_cut->Fill(E1);
                     out.h_3cl_E_gem_cut->Fill(E2);
                     out.h_3cl_E_gem_cut->Fill(E3);
@@ -1080,6 +1194,8 @@ static void mergeResult(QuickResult &dst, const QuickResult &src, fdec::HyCalSys
     dst.h_3cl_pty_gem_cut->Add(src.h_3cl_pty_gem_cut.get());
     dst.h2_3cl_Pt_gem_cut->Add(src.h2_3cl_Pt_gem_cut.get());
     dst.h_3cl_tDiff_gem_cut->Add(src.h_3cl_tDiff_gem_cut.get());
+    dst.h_3cl_Vz_gem_cut->Add(src.h_3cl_Vz_gem_cut.get());
+    dst.h2_3cl_Vxy_gem_cut->Add(src.h2_3cl_Vxy_gem_cut.get());
     dst.h_3cl_Pt_totalE_cut->Add(src.h_3cl_Pt_totalE_cut.get());
     dst.h_3cl_Pt_totalE_time_cut->Add(src.h_3cl_Pt_totalE_time_cut.get());
     dst.h_3cl_Pt_totalE_time_clusterE_cut->Add(src.h_3cl_Pt_totalE_time_clusterE_cut.get());
@@ -1316,6 +1432,8 @@ int main(int argc, char *argv[])
     merged->h_3cl_pty_gem_cut->Write();
     merged->h2_3cl_Pt_gem_cut->Write();
     merged->h_3cl_tDiff_gem_cut->Write();
+    merged->h_3cl_Vz_gem_cut->Write();
+    merged->h2_3cl_Vxy_gem_cut->Write();
 
     outfile.cd();
     outfile.mkdir("x17_gem_cut_steps"); outfile.cd("x17_gem_cut_steps");
