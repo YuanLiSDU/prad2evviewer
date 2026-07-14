@@ -110,7 +110,16 @@
                 "data_dir": "",
                 "ref_run":  25655
             }
+        },
+        {
+            "from_run":    25785,
+            "calibration": {"file": "calibration/x17_25825.json"},
+            "gain_factor": {
+                "data_dir": "",
+                "ref_run":  25825
+            }
         }
+
     ],
 
     "// Per-run GEM pedestals + common-mode range.  Bumping pedestals on a":                                                          "",
@@ -139,6 +148,7 @@
         {"from_run": 24685, "target": [0.844334, 1.1635, 0.0]},
         {"from_run": 24827, "target": [0.87584, 1.0391, 0.0]},
         {"from_run": 25200, "target": [0.83566, 1.493, 0.0]},
-        {"from_run": 25540, "target": [-0.097736, 1.6, 0.0]}
+        {"from_run": 25540, "target": [-0.097736, 1.6, 0.0]},
+        {"from_run": 25655, "target": [1.25, 1.6, 0.0]}
     ]
 }
