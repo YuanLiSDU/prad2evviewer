@@ -1646,12 +1646,12 @@ class EpCalibViewerWindow(QMainWindow):
         batch_bar.addWidget(sep)
         batch_bar.addWidget(QLabel("Outer W layers:"))
         self._outer_layer_spin = QSpinBox()
-        self._outer_layer_spin.setRange(1, 3)
+        self._outer_layer_spin.setRange(1, 12)
         self._outer_layer_spin.setValue(1)
         self._outer_layer_spin.setFixedWidth(44)
         self._outer_layer_spin.setToolTip(
             "Number of outermost PbWO4 rings to include\n"
-            "(1 = single border ring, 2 = two outer rings, 3 = three)")
+            "(1 = single border ring, 2 = two outer rings, ..., 12 = twelve)")
         batch_bar.addWidget(self._outer_layer_spin)
         self._outer_restore_btn = QPushButton("\u21a9 Restore Outer W Old Factor")
         self._outer_restore_btn.setToolTip(
