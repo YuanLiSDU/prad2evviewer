@@ -327,7 +327,7 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     r->h_3cl_yield = std::make_unique<TH1F>("3cl_yield",
         "3-Cluster Yield;Scattering Angle (deg);Counts", Nbins, binEdge);
     r->h_3cl_mass = std::make_unique<TH1F>("3cl_mass",
-        "3-Cluster Inv. Mass;Inv. Mass (MeV);Counts", 300, 0, 100);
+        "3-Cluster Inv. Mass;Inv. Mass (MeV);Counts", 1000, 0, 100);
     r->h_3cl_cluster_num = std::make_unique<TH1F>("3cl_cluster_num",
         "3-Cluster Number;Number of Clusters;Counts", 20, 0, 20);
     r->h_3cl_ptx = std::make_unique<TH1F>("3cl_ptx",
@@ -350,7 +350,7 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     r->h_3cl_yield_cut = std::make_unique<TH1F>("3cl_yield_cut",
         "3-Cluster Yield - Cut;Scattering Angle (deg);Counts", Nbins, binEdge);
     r->h_3cl_mass_cut = std::make_unique<TH1F>("3cl_mass_cut",
-        "3-Cluster Inv. Mass - Cut;Inv. Mass (MeV);Counts", 300, 0, 100);
+        "3-Cluster Inv. Mass - Cut;Inv. Mass (MeV);Counts", 1000, 0, 100);
     r->h_3cl_ptx_cut = std::make_unique<TH1F>("3cl_ptx_cut",
         "3-Cluster Ptx - Cut;Ptx (MeV);Counts", 200, -50, 50);
     r->h_3cl_pty_cut = std::make_unique<TH1F>("3cl_pty_cut",
@@ -374,7 +374,7 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     r->h_3cl_yield_gem = std::make_unique<TH1F>("3cl_yield_gem",
         "3-Cluster Yield with GEM matching;Scattering Angle (deg);Counts", Nbins, binEdge);
     r->h_3cl_mass_gem = std::make_unique<TH1F>("3cl_mass_gem",
-        "3-Cluster Inv. Mass with GEM matching;Inv. Mass (MeV);Counts", 300, 0, 100);
+        "3-Cluster Inv. Mass with GEM matching;Inv. Mass (MeV);Counts", 1000, 0, 100);
     r->h_3cl_ptx_gem = std::make_unique<TH1F>("3cl_ptx_gem",
         "3-Cluster Ptx with GEM matching;Ptx (MeV);Counts", 200, -50, 50);
     r->h_3cl_pty_gem = std::make_unique<TH1F>("3cl_pty_gem",
@@ -395,7 +395,7 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     r->h_3cl_yield_gem_cut = std::make_unique<TH1F>("3cl_yield_gem_cut",
         "3-Cluster Yield with GEM matching - Cut;Scattering Angle (deg);Counts", Nbins, binEdge);
     r->h_3cl_mass_gem_cut = std::make_unique<TH1F>("3cl_mass_gem_cut",
-        "3-Cluster Inv. Mass with GEM matching - Cut;Inv. Mass (MeV);Counts", 300, 0, 100);
+        "3-Cluster Inv. Mass with GEM matching - Cut;Inv. Mass (MeV);Counts", 1000, 0, 100);
     r->h_3cl_ptx_gem_cut = std::make_unique<TH1F>("3cl_ptx_gem_cut",
         "3-Cluster Ptx with GEM matching - Cut;Ptx (MeV);Counts", 200, -50, 50);
     r->h_3cl_pty_gem_cut = std::make_unique<TH1F>("3cl_pty_gem_cut",
@@ -414,15 +414,15 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     r->h_3cl_Pt_totalE_time_clusterE_moller_cut = std::make_unique<TH2F>("3cl_Pt_totalE_time_clusterE_moller_cut",
         "3-Cluster Pt with Total Energy, Time, Cluster Energy, and Moller Cut;Ptx (MeV);Pty (MeV)", 400, -50, 50, 400, -50, 50);
     r->h_3cl_mass_totalE_cut = std::make_unique<TH1F>("3cl_mass_totalE_cut",
-        "3-Cluster Inv. Mass with Total Energy Cut;Inv. Mass (MeV);Counts", 300, 0, 100);
+        "3-Cluster Inv. Mass with Total Energy Cut;Inv. Mass (MeV);Counts", 1000, 0, 100);
     r->h_3cl_mass_totalE_time_cut = std::make_unique<TH1F>("3cl_mass_totalE_time_cut",
-        "3-Cluster Inv. Mass with Total Energy and Time Cut;Inv. Mass (MeV);Counts", 300, 0, 100);
+        "3-Cluster Inv. Mass with Total Energy and Time Cut;Inv. Mass (MeV);Counts", 1000, 0, 100);
     r->h_3cl_mass_totalE_time_clusterE_cut = std::make_unique<TH1F>("3cl_mass_totalE_time_clusterE_cut",
-        "3-Cluster Inv. Mass with Total Energy, Time, and Cluster Energy Cut;Inv. Mass (MeV);Counts", 300, 0, 100);
+        "3-Cluster Inv. Mass with Total Energy, Time, and Cluster Energy Cut;Inv. Mass (MeV);Counts", 1000, 0, 100);
     r->h_3cl_mass_totalE_time_clusterE_Pt_cut = std::make_unique<TH1F>("3cl_mass_totalE_time_clusterE_Pt_cut",
-        "3-Cluster Inv. Mass with Total Energy, Time, Cluster Energy, and Pt Cut;Inv. Mass (MeV);Counts", 300, 0, 100);
+        "3-Cluster Inv. Mass with Total Energy, Time, Cluster Energy, and Pt Cut;Inv. Mass (MeV);Counts", 1000, 0, 100);
     r->h_3cl_mass_totalE_time_clusterE_Pt_moller_cut = std::make_unique<TH1F>("3cl_mass_totalE_time_clusterE_Pt_moller_cut",
-        "3-Cluster Inv. Mass with Total Energy, Time, Cluster Energy, Pt, and Moller Cut;Inv. Mass (MeV);Counts", 300, 0, 100);
+        "3-Cluster Inv. Mass with Total Energy, Time, Cluster Energy, Pt, and Moller Cut;Inv. Mass (MeV);Counts", 1000, 0, 100);
 
     detach(r->hit_pos.get());
     detach(r->h_1cl.get());
