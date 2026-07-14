@@ -53,6 +53,8 @@ constexpr double kCrystalSurfMm = kTargetCenterMm + 7506.464;
 constexpr double kHyCalZFromTargetMm = kCrystalSurfMm - kTargetCenterMm;
 constexpr double kInvalidModuleEdep = 1.e30;
 
+constexpr double corr = 1.05; // Correction factor for energy
+
 // Local-max 3x3 VTP-like cluster cuts.  Edit these values by hand as needed.
 constexpr float kVtpSeedEnergyMinMeV = 40.f;
 constexpr float kVtpSeedEnergyMaxMeV = 10000.f;
@@ -66,14 +68,14 @@ constexpr double kVtpCenter4x4AbsXMaxMm = 41.6;
 constexpr double kVtpCenter4x4AbsYMaxMm = 41.6;
 
 // Simulated trigger-bit emulation.  Bit numbers match database/trigger_bits.json.
-constexpr float kTriggerRawSumTotalEnergyMinMeV = 900.f;
-constexpr float kTrigger3ClusterTotalEnergyMinMeV = 1100.f;
+constexpr float kTriggerRawSumTotalEnergyMinMeV = 750.f;
+constexpr float kTrigger3ClusterTotalEnergyMinMeV = 900.f;
 constexpr float kTrigger3ClusterTotalEnergyMaxMeV = 10000.f;
 constexpr int kTrigger3ClusterMinClusters = 3;
 
 // Smear reconstructed HyCal cluster energy.  Resolution = a / sqrt(E[GeV]).
 constexpr bool kHyCalSmearClusterEnergy = true;
-constexpr float kHyCalClusterEnergyResolutionA = 0.03f;
+constexpr float kHyCalClusterEnergyResolutionA = 0.035f;
 constexpr unsigned kHyCalSmearSeed = 12345u;
 
 // G4 DID is built from volume copy numbers:
@@ -421,14 +423,16 @@ void fillLocalMaxVtpClusters(const fdec::HyCalSystem &hycal,
     }
 }
 
-uint32_t simulatedTriggerBits(float total_energy_mev, int vtp_cluster_count)
+uint32_t simulatedTriggerBits(float total_energy_mev,
+                              float vtp_cluster_total_energy_mev,
+                              int vtp_cluster_count)
 {
     uint32_t bits = 0;
     if (total_energy_mev > kTriggerRawSumTotalEnergyMinMeV)
         bits |= prad2::TBIT_sum;
     if (vtp_cluster_count >= kTrigger3ClusterMinClusters &&
-        total_energy_mev > kTrigger3ClusterTotalEnergyMinMeV &&
-        total_energy_mev < kTrigger3ClusterTotalEnergyMaxMeV) {
+        vtp_cluster_total_energy_mev > kTrigger3ClusterTotalEnergyMinMeV &&
+        vtp_cluster_total_energy_mev < kTrigger3ClusterTotalEnergyMaxMeV) {
         bits |= prad2::TBIT_3cl;
     }
     return bits;
@@ -552,7 +556,7 @@ int main(int argc, char *argv[])
               << kTriggerRawSumTotalEnergyMinMeV
               << " MeV; 3Cluster if vtp_cl_n>="
               << kTrigger3ClusterMinClusters
-              << " and totalE=(" << kTrigger3ClusterTotalEnergyMinMeV
+              << " and vtpClusterSumE=(" << kTrigger3ClusterTotalEnergyMinMeV
               << ", " << kTrigger3ClusterTotalEnergyMaxMeV << ") MeV\n"
               << "[setup] HC E smear    : "
               << (kHyCalSmearClusterEnergy ? "on" : "off")
@@ -649,14 +653,18 @@ int main(int argc, char *argv[])
             if (!std::isfinite(edep) || edep <= 0. ||
                 edep >= kInvalidModuleEdep)
                 continue;
-            const float energy = static_cast<float>(edep);
+            const float energy = static_cast<float>(edep) * corr;
             module_energy[entry.module_index] += energy;
             clusterer.AddHit(entry.module_index, energy, 0.f);
             ev->total_energy += energy;
         }
 
         fillLocalMaxVtpClusters(pipeline.hycal, module_energy, *ev);
+        float vtp_cluster_total_energy_mev = 0.f;
+        for (int i = 0; i < ev->vtp_cl_n; ++i)
+            vtp_cluster_total_energy_mev += ev->vtp_cl_energy[i];
         ev->trigger_bits = simulatedTriggerBits(ev->total_energy,
+                                                vtp_cluster_total_energy_mev,
                                                 ev->vtp_cl_n);
 
         clusterer.FormClusters();
