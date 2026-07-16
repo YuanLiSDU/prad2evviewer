@@ -643,7 +643,7 @@ static bool processFile(const std::string &path,
             }
             out.h_tot->Fill(ev.total_energy);
 
-            if (ev.n_clusters == 1 && inHyCal(ev.cl_x[0], ev.cl_y[0])) {
+            if (ev.n_clusters == 1) {
                 physics.FillModuleEnergy(ev.cl_center[0], ev.cl_energy[0]);
                 out.h_1cl->Fill(ev.cl_energy[0]);
                 out.h2_energy_theta_ep_ee->Fill(
@@ -1457,7 +1457,8 @@ int main(int argc, char *argv[])
 
     outfile.mkdir("module_energy"); outfile.cd("module_energy");
     for (int i = 0; i < hycal.module_count(); i++) {
-        TH1F *h = physics.GetModuleEnergyHist(i);
+        int module_id = hycal.module(i).id;
+        TH1F *h = physics.GetModuleEnergyHist(module_id);
         if (h && h->GetEntries() > 0) h->Write();
     }
 
