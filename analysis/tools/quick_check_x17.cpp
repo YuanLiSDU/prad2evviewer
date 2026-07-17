@@ -1165,10 +1165,11 @@ int main(int argc, char *argv[])
         }
     }
 
-    std::vector<std::unique_ptr<QuickResult>> results(root_files.size());
+    auto merged = makeResult(hycal);
     std::atomic<size_t> next_file{0};
     std::atomic<int> errors{0};
     std::mutex io_mtx;
+    std::mutex merge_mtx;
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
     for (int t = 0; t < num_threads; ++t) {
@@ -1182,16 +1183,19 @@ int main(int argc, char *argv[])
                     std::cerr << "Processing file [" << (idx + 1) << "/"
                               << root_files.size() << "]: " << root_files[idx] << "\n";
                 }
-                if (!processFile(root_files[idx], file_limits[idx], hycal, Ebeam, *res))
+                if (!processFile(root_files[idx], file_limits[idx], hycal, Ebeam, *res)) {
                     ++errors;
-                results[idx] = std::move(res);
+                    continue;
+                }
+                {
+                    std::lock_guard<std::mutex> lk(merge_mtx);
+                    mergeResult(*merged, *res, hycal);
+                }
             }
         });
     }
     for (auto &t : threads) t.join();
     if (errors > 0) return 1;
-
-    auto merged = makeResult(hycal);
 
     TString outName = output;
     if (outName.IsNull())
