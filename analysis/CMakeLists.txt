@@ -60,6 +60,7 @@ add_analysis_tool(live_charge tools/live_charge.cpp)
 add_analysis_tool(epCalib   tools/epCalib.cpp)
 add_analysis_tool(cosmic_test tools/cosmic_test.cpp)
 add_analysis_tool(quick_check tools/quick_check.cpp)
+add_analysis_tool(quick_check_x17 tools/quick_check_x17.cpp)
 add_analysis_tool(matching tools/matching.cpp)
 add_analysis_tool(det_calib tools/det_calib.cpp)
 add_analysis_tool(gain_monitor tools/gain_monitor.cpp)
@@ -74,7 +75,7 @@ add_analysis_tool(calib_5by5 tools/calib_5by5.cpp)
 
 install(TARGETS replay_rawdata replay_gainCorr online_gain_monitor_base replay_recon replay_filter replay_add_hv
                 live_charge epCalib
-                cosmic_test quick_check matching det_calib cosmic_lg sim2replay sim2replay_hc
+                cosmic_test quick_check quick_check_x17 matching det_calib cosmic_lg sim2replay sim2replay_hc
                 gain_monitor gain_fitter refGain_produce
                 hycal_rf_offset_calib nonlinearity calib_5by5
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
