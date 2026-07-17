@@ -1037,6 +1037,7 @@ static bool processFile(const std::string &path,
                     return std::atan2(std::sqrt(rel[0] * rel[0] + rel[1] * rel[1]), rel[2]) * 180.f / M_PI;
                 };
 
+                float mass1 = electronPairInvariantMass(x1, y1, z1, E1, x2, y2, z2, E2);
                 float mass2 = electronPairInvariantMass(x1, y1, z1, E1, x3, y3, z3, E3);
                 float mass3 = electronPairInvariantMass(x2, y2, z2, E2, x3, y3, z3, E3);
 
@@ -1098,10 +1099,12 @@ static bool processFile(const std::string &path,
                 out.h_3cl_yield_gem->Fill(theta1);
                 out.h_3cl_yield_gem->Fill(theta2);
                 out.h_3cl_yield_gem->Fill(theta3);
+                //if (std::isfinite(mass1)) out.h_3cl_mass_gem->Fill(mass1);
                 if (std::isfinite(mass2)) out.h_3cl_mass_gem->Fill(mass2);
                 if (std::isfinite(mass3)) out.h_3cl_mass_gem->Fill(mass3);
 
                 auto fill_mass_step = [&](TH1F *hist) {
+                    //if (std::isfinite(mass1)) hist->Fill(mass1);
                     if (std::isfinite(mass2)) hist->Fill(mass2);
                     if (std::isfinite(mass3)) hist->Fill(mass3);
                 };
@@ -1148,6 +1151,7 @@ static bool processFile(const std::string &path,
                     out.h_3cl_yield_gem_cut->Fill(theta1);
                     out.h_3cl_yield_gem_cut->Fill(theta2);
                     out.h_3cl_yield_gem_cut->Fill(theta3);
+                    //if (std::isfinite(mass1)) out.h_3cl_mass_gem_cut->Fill(mass1);
                     if (std::isfinite(mass2)) out.h_3cl_mass_gem_cut->Fill(mass2);
                     if (std::isfinite(mass3)) out.h_3cl_mass_gem_cut->Fill(mass3);
                 }
@@ -1190,6 +1194,7 @@ static bool processFile(const std::string &path,
                     return std::atan2(std::sqrt(rel[0] * rel[0] + rel[1] * rel[1]), rel[2]) * 180.f / M_PI;
                 };
 
+                float mass1 = electronPairInvariantMass(x1, y1, z1, E1, x2, y2, z2, E2);
                 float mass2 = electronPairInvariantMass(x1, y1, z1, E1, x3, y3, z3, E3);
                 float mass3 = electronPairInvariantMass(x2, y2, z2, E2, x3, y3, z3, E3);
 
@@ -1251,10 +1256,12 @@ static bool processFile(const std::string &path,
                 out.h_3cl_yield_gem->Fill(theta1);
                 out.h_3cl_yield_gem->Fill(theta2);
                 out.h_3cl_yield_gem->Fill(theta3);
+                //if (std::isfinite(mass1)) out.h_3cl_mass_gem->Fill(mass1);
                 if (std::isfinite(mass2)) out.h_3cl_mass_gem->Fill(mass2);
                 if (std::isfinite(mass3)) out.h_3cl_mass_gem->Fill(mass3);
 
                 auto fill_mass_step = [&](TH1F *hist) {
+                    //if (std::isfinite(mass1)) hist->Fill(mass1);
                     if (std::isfinite(mass2)) hist->Fill(mass2);
                     if (std::isfinite(mass3)) hist->Fill(mass3);
                 };
@@ -1301,6 +1308,7 @@ static bool processFile(const std::string &path,
                     out.h_3cl_yield_gem_cut->Fill(theta1);
                     out.h_3cl_yield_gem_cut->Fill(theta2);
                     out.h_3cl_yield_gem_cut->Fill(theta3);
+                    //if (std::isfinite(mass1)) out.h_3cl_mass_gem_cut->Fill(mass1);
                     if (std::isfinite(mass2)) out.h_3cl_mass_gem_cut->Fill(mass2);
                     if (std::isfinite(mass3)) out.h_3cl_mass_gem_cut->Fill(mass3);
                 }
