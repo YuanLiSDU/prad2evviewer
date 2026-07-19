@@ -277,6 +277,11 @@ struct QuickResult {
     std::unique_ptr<TH1F> h_gamma_pty_pass;
     std::unique_ptr<TH2F> h2_gamma_Pt_pass;
     std::unique_ptr<TH1F> h_gamma_tDiff_pass;
+    std::unique_ptr<TH1F> h_gamma_E_gamma_pass;
+    std::unique_ptr<TH1F> h_gamma_E_electron_pass;
+    std::unique_ptr<TH2F> h2_gamma_E_gamma_vs_E_electron_pass;
+    std::unique_ptr<TH2F> h2_gamma_Etheta_gamma_pass;
+    std::unique_ptr<TH2F> h2_gamma_Etheta_electron_pass;
 
     std::unique_ptr<TH1F> h_3cl_cluster_gem_num;
     std::unique_ptr<TH1F> h_3cl_totalE_gem;
@@ -411,6 +416,16 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
         "Gamma Channel Pt hycal - Pass;Ptx (MeV);Pty (MeV)", 400, -50, 50, 400, -50, 50);
     r->h_gamma_tDiff_pass = std::make_unique<TH1F>("gamma_tDiff_pass",
         "Gamma Channel Time Difference - Pass;Time Difference (ns);Counts", 200, -50, 50);
+    r->h_gamma_E_gamma_pass = std::make_unique<TH1F>("gamma_E_gamma_pass",
+        "Gamma Cluster Energy - Pass;Energy (MeV);Counts", 3750, 0, 2500);
+    r->h_gamma_E_electron_pass = std::make_unique<TH1F>("gamma_E_electron_pass",
+        "Electron Cluster Energy - Pass;Energy (MeV);Counts", 3750, 0, 2500);
+    r->h2_gamma_E_gamma_vs_E_electron_pass = std::make_unique<TH2F>("gamma_E_gamma_vs_E_electron_pass",
+        "Gamma vs Electron Cluster Energy - Pass;Electron Energy (MeV);Gamma Energy (MeV)", 7500, 0, 5000, 7500, 0, 5000);
+    r->h2_gamma_Etheta_gamma_pass = std::make_unique<TH2F>("gamma_Etheta_gamma_pass",
+        "Gamma Cluster Energy vs Angle - Pass;Theta (deg);Energy (MeV)", 80, 0, 4, 7500, 0, 5000);
+    r->h2_gamma_Etheta_electron_pass = std::make_unique<TH2F>("gamma_Etheta_electron_pass",
+        "Electron Cluster Energy vs Angle - Pass;Theta (deg);Energy (MeV)", 80, 0, 4, 7500, 0, 5000);
 
     // use gem matching to cut the 3-cluster events
     r->h_3cl_cluster_gem_num = std::make_unique<TH1F>( "3cl_cluster_gem_num",
@@ -524,6 +539,11 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     detach(r->h_gamma_pty_pass.get());
     detach(r->h2_gamma_Pt_pass.get());
     detach(r->h_gamma_tDiff_pass.get());
+    detach(r->h_gamma_E_gamma_pass.get());
+    detach(r->h_gamma_E_electron_pass.get());
+    detach(r->h2_gamma_E_gamma_vs_E_electron_pass.get());
+    detach(r->h2_gamma_Etheta_gamma_pass.get());
+    detach(r->h2_gamma_Etheta_electron_pass.get());
     
     detach(r->h_3cl_cluster_gem_num.get());
     detach(r->h2_3cl_hits_gem.get());
@@ -824,6 +844,14 @@ static bool processFile(const std::string &path,
                         out.h_gamma_yield_pass->Fill(theta[gamma_index1]);
                         out.h_gamma_yield_pass->Fill(theta[gamma_index2]);
                         out.h_gamma_yield_pass->Fill(theta[electron_index]);
+                        out.h_gamma_E_gamma_pass->Fill(E[gamma_index1]);
+                        out.h_gamma_E_gamma_pass->Fill(E[gamma_index2]);
+                        out.h_gamma_E_electron_pass->Fill(E[electron_index]);
+                        out.h2_gamma_E_gamma_vs_E_electron_pass->Fill(E[electron_index], E[gamma_index1]);
+                        out.h2_gamma_E_gamma_vs_E_electron_pass->Fill(E[electron_index], E[gamma_index2]);
+                        out.h2_gamma_Etheta_gamma_pass->Fill(theta[gamma_index1], E[gamma_index1]);
+                        out.h2_gamma_Etheta_gamma_pass->Fill(theta[gamma_index2], E[gamma_index2]);
+                        out.h2_gamma_Etheta_electron_pass->Fill(theta[electron_index], E[electron_index]);
                         if (std::isfinite(mass)) out.h_gamma_mass_pass->Fill(mass);
                     }
                 }
@@ -1288,6 +1316,11 @@ static void mergeResult(QuickResult &dst, const QuickResult &src, fdec::HyCalSys
     dst.h_gamma_pty_pass->Add(src.h_gamma_pty_pass.get());
     dst.h2_gamma_Pt_pass->Add(src.h2_gamma_Pt_pass.get());
     dst.h_gamma_tDiff_pass->Add(src.h_gamma_tDiff_pass.get());
+    dst.h_gamma_E_gamma_pass->Add(src.h_gamma_E_gamma_pass.get());
+    dst.h_gamma_E_electron_pass->Add(src.h_gamma_E_electron_pass.get());
+    dst.h2_gamma_E_gamma_vs_E_electron_pass->Add(src.h2_gamma_E_gamma_vs_E_electron_pass.get());
+    dst.h2_gamma_Etheta_gamma_pass->Add(src.h2_gamma_Etheta_gamma_pass.get());
+    dst.h2_gamma_Etheta_electron_pass->Add(src.h2_gamma_Etheta_electron_pass.get());
 
     // X17 three-cluster histograms with GEM matching.
     dst.h_3cl_cluster_gem_num->Add(src.h_3cl_cluster_gem_num.get());
@@ -1484,6 +1517,11 @@ int main(int argc, char *argv[])
     merged->h_gamma_pty_pass->Write();
     merged->h2_gamma_Pt_pass->Write();
     merged->h_gamma_tDiff_pass->Write();
+    merged->h_gamma_E_gamma_pass->Write();
+    merged->h_gamma_E_electron_pass->Write();
+    merged->h2_gamma_E_gamma_vs_E_electron_pass->Write();
+    merged->h2_gamma_Etheta_gamma_pass->Write();
+    merged->h2_gamma_Etheta_electron_pass->Write();
 
     outfile.cd();
     outfile.mkdir("x17_gem"); outfile.cd("x17_gem");
