@@ -187,7 +187,7 @@ int main(int argc, char *argv[])
     TClass::GetClass("TFile");
     TClass::GetClass("TBranch");
 
-    std::string daq_config, daq_map, gem_ped_file, output_dir;
+    std::string recon_config,daq_config, daq_map, gem_ped_file, output_dir;
     float zerosup_override = 0.f;
     int max_files = -1;
     int num_threads = 4;
@@ -208,11 +208,12 @@ int main(int argc, char *argv[])
     };
 
     int opt;
-    while ((opt = getopt_long_only(argc, argv, "o:f:c:d:j:g:z:m:",
+    while ((opt = getopt_long_only(argc, argv, "o:f:r:c:d:j:g:z:m:",
                                    long_options, nullptr)) != -1) {
         switch (opt) {
             case 'o': output_dir = optarg; break;
             case 'f': max_files = std::atoi(optarg); break;
+            case 'r': recon_config = optarg; break;
             case 'c': daq_config = optarg; break;
             case 'd': daq_map = optarg; break;
             case 'j': num_threads = std::atoi(optarg); break;
@@ -238,6 +239,7 @@ int main(int argc, char *argv[])
         std::cerr << "  -o  output directory (REQUIRED)\n";
         std::cerr << "  -f  max files to process (default: all)\n";
         std::cerr << "  -j  number of threads (default: 4)\n";
+        std::cerr << "  -r  reconstruction config JSON\n";
         std::cerr << "  -c  DAQ config JSON (default: <db>/daq_config.json)\n";
         std::cerr << "  -d  HyCal map JSON (default: <db>/hycal_map.json)\n";
         std::cerr << "  -g  GEM pedestal JSON\n";
@@ -253,6 +255,10 @@ int main(int argc, char *argv[])
         return 1;
     }
     std::cout << "Replay mode: " << (x17 ? "X17" : prad1 ? "PRad1" : "PRad2") << "\n";
+    if(recon_config.empty()) {
+        if(x17) recon_config = db_dir + "/reconstruction_config_x17.json";
+        else recon_config = db_dir + "/reconstruction_config.json";
+    }
     if (merge_batch_size < 0)
         merge_batch_size = 0;
     int num_files = static_cast<int>(evio_files.size());
@@ -303,9 +309,9 @@ int main(int argc, char *argv[])
 
             std::string out = output_dir + "/" + makeOutputFile(evio_files[idx]);
             bool ok = x17
-                ? replay.ProcessWithReconX17(evio_files[idx], out, gRunConfig, db_dir,
+                ? replay.ProcessWithReconX17(evio_files[idx], out, gRunConfig, db_dir, recon_config,
                                              daq_config, gem_ped_file, zerosup_override)
-                : replay.ProcessWithRecon(evio_files[idx], out, gRunConfig, db_dir,
+                : replay.ProcessWithRecon(evio_files[idx], out, gRunConfig, db_dir, recon_config,
                                           daq_config, gem_ped_file, zerosup_override, prad1);
             output_files[idx] = out;
             if (ok)

@@ -438,6 +438,22 @@ Pipeline PipelineBuilder::build()
         LOG(oss.str());
     }
 
+    // --- 12b. GEM strip-level cuts (sourced from reconstruction_config)
+    if (recon.contains("gem") && recon["gem"].is_object()) {
+        const auto &gemr = recon["gem"];
+        if (gemr.contains("default") && gemr["default"].is_object()) {
+            const auto &def = gemr["default"];
+            if (def.contains("reject_first_timebin") && def["reject_first_timebin"].is_boolean())
+                out.gem.SetRejectFirstTimebin(def["reject_first_timebin"].get<bool>());
+            if (def.contains("reject_last_timebin") && def["reject_last_timebin"].is_boolean())
+                out.gem.SetRejectLastTimebin(def["reject_last_timebin"].get<bool>());
+            if (def.contains("min_peak_adc") && def["min_peak_adc"].is_number())
+                out.gem.SetMinPeakAdc(def["min_peak_adc"].get<float>());
+            if (def.contains("min_sum_adc") && def["min_sum_adc"].is_number())
+                out.gem.SetMinSumAdc(def["min_sum_adc"].get<float>());
+        }
+    }
+
     // --- pedestal checksum (matches Python audit's [PEDSUM] line) --------
     if (log_pedestal_checksum_) {
         int n_apvs = out.gem.GetNApvs();

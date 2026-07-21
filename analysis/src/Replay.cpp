@@ -567,7 +567,7 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
 }
 
 bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &output_root, RunConfig &gRunConfig,
-                                const std::string &db_dir,
+                                const std::string &db_dir, const std::string &recon_config_file,
                                 const std::string &daq_config_file, const std::string &gem_ped_file,
                                 const float zerosup_override, bool prad1)
 {
@@ -639,6 +639,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
         std::string gem_map_override   = daq_cfg_.gem_map_file;
 
         prad2::Pipeline pipeline = prad2::PipelineBuilder()
+            .set_recon_config(recon_config_file)
             .set_database_dir(db_dir)
             .set_loaded_daq_config(std::move(daq_cfg_))
             .set_daq_config(daq_config_file)        // logging only
@@ -1126,7 +1127,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
 }
 
 bool Replay::ProcessWithReconX17(const std::string &input_evio, const std::string &output_root, RunConfig &gRunConfig,
-                                const std::string &db_dir,
+                                const std::string &db_dir, const std::string &recon_config_file,
                                 const std::string &daq_config_file, const std::string &gem_ped_file,
                                 const float zerosup_override)
 {
@@ -1157,6 +1158,7 @@ bool Replay::ProcessWithReconX17(const std::string &input_evio, const std::strin
     std::string gem_map_override   = daq_cfg_.gem_map_file;
 
     prad2::Pipeline pipeline = prad2::PipelineBuilder()
+        .set_recon_config(recon_config_file)
         .set_database_dir(db_dir)
         .set_loaded_daq_config(std::move(daq_cfg_))
         .set_daq_config(daq_config_file)        // logging only

@@ -68,16 +68,11 @@ void GemSystem::Init(const std::string &map_file)
     zerosup_thres_   = j.value("zero_suppression_threshold", 5.f);
     crosstalk_thres_ = j.value("cross_talk_threshold", 8.f);
 
-    // strip-level cuts
-    reject_first_timebin_ = j.value("reject_first_timebin", true);
-    reject_last_timebin_  = j.value("reject_last_timebin", true);
-    min_peak_adc_         = j.value("min_peak_adc", 0.f);
-    min_sum_adc_          = j.value("min_sum_adc", 0.f);
-
     // Reconstruction config (clustering + XY matching) is supplied by the
-    // application layer via SetReconConfigs() — one ClusterConfig per
-    // detector parsed from reconstruction_config.json.  Until then each
-    // detector starts with library defaults.
+    // application layer via PipelineBuilder/reconstruction_config.json:
+    //  - one ClusterConfig per detector via SetReconConfigs()
+    //  - strip-level cuts (reject_first/last_timebin, min_peak/sum_adc)
+    // Until then each detector starts with library defaults.
 
     // --- parse APV entries ---
     apvs_.clear();

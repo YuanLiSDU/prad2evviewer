@@ -266,6 +266,10 @@ public:
     float GetMinSumAdc()           const { return min_sum_adc_; }
     void  SetCommonModeThreshold(float v) { common_thres_ = v; }
     void  SetZeroSupThreshold(float v)    { zerosup_thres_ = v; }
+    void  SetRejectFirstTimebin(bool v)   { reject_first_timebin_ = v; }
+    void  SetRejectLastTimebin(bool v)    { reject_last_timebin_ = v; }
+    void  SetMinPeakAdc(float v)          { min_peak_adc_ = v; }
+    void  SetMinSumAdc(float v)           { min_sum_adc_ = v; }
 
 private:
     // --- per-APV processing -------------------------------------------------

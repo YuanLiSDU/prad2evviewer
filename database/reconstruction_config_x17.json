@@ -39,7 +39,7 @@
             "match_time_diff":     50.0,
             "match_ts_period":     25.0,
             "// Strip-level cuts (migrated from gem_map.json):": "",
-            "reject_first_timebin": false,
+            "reject_first_timebin": true,
             "reject_last_timebin":  false,
             "min_peak_adc":         30.0,
             "min_sum_adc":          60.0

@@ -421,8 +421,9 @@ static void bind_gem(py::module_ &m)
             &gem::GemSystem::SetZeroSupThreshold)
         .def_property_readonly("cross_talk_threshold",
             &gem::GemSystem::GetCrossTalkThreshold)
-        // Per-strip filters loaded from gem_map.json — exposed read-only so
-        // analysis scripts can verify they match the live monitor.
+        // Per-strip filters come from reconstruction_config.json:gem.default
+        // via PipelineBuilder.
+        // Exposed read-only so analysis scripts can verify runtime values.
         .def_property_readonly("reject_first_timebin",
             &gem::GemSystem::GetRejectFirstTimebin)
         .def_property_readonly("reject_last_timebin",
