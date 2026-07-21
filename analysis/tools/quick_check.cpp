@@ -53,9 +53,6 @@
 using namespace analysis;
 namespace fs = std::filesystem;
 
-// Forward declaration
-float fitAndDraw(TH1F* hist, const std::string& out_path, float fit_range);
-
 // Aliases for the shared replay data structures
 using EventVars_Recon = prad2::ReconEventData;
 
@@ -308,6 +305,7 @@ struct QuickResult {
     std::unique_ptr<TH1F> h_3cl_E_gem_cut;
     std::unique_ptr<TH1F> h_3cl_yield_gem_cut;
     std::unique_ptr<TH1F> h_3cl_mass_gem_cut;
+    std::unique_ptr<TH1F> h_3cl_mass_gem_cut_2comb;
     std::unique_ptr<TH1F> h_3cl_ptx_gem_cut;
     std::unique_ptr<TH1F> h_3cl_pty_gem_cut;
     std::unique_ptr<TH2F> h2_3cl_Pt_gem_cut;
@@ -472,6 +470,8 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
         "3-Cluster Yield with GEM matching - Cut;Scattering Angle (deg);Counts", Nbins, binEdge);
     r->h_3cl_mass_gem_cut = std::make_unique<TH1F>("3cl_mass_gem_cut",
         "3-Cluster Inv. Mass with GEM matching - Cut;Inv. Mass (MeV);Counts", 1000, 0, 100);
+    r->h_3cl_mass_gem_cut_2comb = std::make_unique<TH1F>("3cl_mass_gem_cut_2comb",
+        "3-Cluster Inv. Mass with GEM matching - Cut (2 comb with lowest E);Inv. Mass (MeV);Counts", 1000, 0, 100);
     r->h_3cl_ptx_gem_cut = std::make_unique<TH1F>("3cl_ptx_gem_cut",
         "3-Cluster Ptx with GEM matching - Cut;Ptx (MeV);Counts", 200, -50, 50);
     r->h_3cl_pty_gem_cut = std::make_unique<TH1F>("3cl_pty_gem_cut",
@@ -570,6 +570,7 @@ static std::unique_ptr<QuickResult> makeResult(fdec::HyCalSystem &hycal)
     detach(r->h_3cl_totalE_gem_cut.get());
     detach(r->h_3cl_yield_gem_cut.get());
     detach(r->h_3cl_mass_gem_cut.get());
+    detach(r->h_3cl_mass_gem_cut_2comb.get());
     detach(r->h_3cl_ptx_gem_cut.get());
     detach(r->h_3cl_pty_gem_cut.get());
     detach(r->h2_3cl_Pt_gem_cut.get());
@@ -674,6 +675,7 @@ static bool processFile(const std::string &path,
                         out.h2_ee_E_angle_hc->Fill(t1, ev.cl_energy[0]);
                         out.h2_ee_E_angle_hc->Fill(t2, ev.cl_energy[1]);
                         out.mollers_hc.push_back(mp);
+                        if (out.mollers_hc.size() > 3) out.mollers_hc.erase(out.mollers_hc.begin());
 
                         if (out.mollers_hc.size() > 1) {
                             auto center = physics.GetMollerCenter(out.mollers_hc[out.mollers_hc.size() - 2], mp);
@@ -772,6 +774,7 @@ static bool processFile(const std::string &path,
 
                 MollerEvent &mev = mollerData_event.front();
                 out.mollers.push_back(mev);
+                if (out.mollers.size() > 3) out.mollers.erase(out.mollers.begin());
 
                 float t1 = std::atan2(std::sqrt(mev.first.x*mev.first.x + mev.first.y*mev.first.y),
                                     mev.first.z) * 180.f / M_PI;
@@ -1113,6 +1116,8 @@ static bool processFile(const std::string &path,
                     if (std::isfinite(mass1)) out.h_3cl_mass_gem_cut->Fill(mass1);
                     if (std::isfinite(mass2)) out.h_3cl_mass_gem_cut->Fill(mass2);
                     if (std::isfinite(mass3)) out.h_3cl_mass_gem_cut->Fill(mass3);
+                    if (std::isfinite(mass2)) out.h_3cl_mass_gem_cut_2comb->Fill(mass2);
+                    if (std::isfinite(mass3)) out.h_3cl_mass_gem_cut_2comb->Fill(mass3);
                 }
             }
         }
@@ -1190,6 +1195,7 @@ static void mergeResult(QuickResult &dst, const QuickResult &src, fdec::HyCalSys
     dst.h_3cl_E_gem_cut->Add(src.h_3cl_E_gem_cut.get());
     dst.h_3cl_yield_gem_cut->Add(src.h_3cl_yield_gem_cut.get());
     dst.h_3cl_mass_gem_cut->Add(src.h_3cl_mass_gem_cut.get());
+    dst.h_3cl_mass_gem_cut_2comb->Add(src.h_3cl_mass_gem_cut_2comb.get());
     dst.h_3cl_ptx_gem_cut->Add(src.h_3cl_ptx_gem_cut.get());
     dst.h_3cl_pty_gem_cut->Add(src.h_3cl_pty_gem_cut.get());
     dst.h2_3cl_Pt_gem_cut->Add(src.h2_3cl_Pt_gem_cut.get());
@@ -1285,39 +1291,37 @@ int main(int argc, char *argv[])
         }
     }
 
-    std::vector<std::unique_ptr<QuickResult>> results(root_files.size());
+    auto merged = makeResult(hycal);
     std::atomic<size_t> next_file{0};
     std::atomic<int> errors{0};
     std::mutex io_mtx;
+    std::mutex merge_mtx;
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
     for (int t = 0; t < num_threads; ++t) {
         threads.emplace_back([&]() {
+            auto res = makeResult(hycal);
             while (true) {
                 size_t idx = next_file.fetch_add(1);
                 if (idx >= root_files.size()) break;
-                auto res = makeResult(hycal);
                 {
                     std::lock_guard<std::mutex> lk(io_mtx);
                     std::cerr << "Processing file [" << (idx + 1) << "/"
                               << root_files.size() << "]: " << root_files[idx] << "\n";
                 }
-                if (!processFile(root_files[idx], file_limits[idx], hycal, Ebeam, *res))
+                if (!processFile(root_files[idx], file_limits[idx], hycal, Ebeam, *res)) {
                     ++errors;
-                results[idx] = std::move(res);
+                    continue;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lk(merge_mtx);
+                mergeResult(*merged, *res, hycal);
             }
         });
     }
     for (auto &t : threads) t.join();
     if (errors > 0) return 1;
-
-    auto merged = makeResult(hycal);
-    MollerData hycal_mollers;
-    for (auto &res : results) {
-        if (!res) continue;
-        mergeResult(*merged, *res, hycal);
-        hycal_mollers.insert(hycal_mollers.end(), res->mollers.begin(), res->mollers.end());
-    }
     for (int i = 1; i <= merged->h_ep_ee_ratio->GetNbinsX(); i++) {
         double ep = merged->h_ep_yield->GetBinContent(i);
         double ee = merged->h_ee_yield->GetBinContent(i);
@@ -1335,10 +1339,6 @@ int main(int argc, char *argv[])
     if (outName.IsNull())
         outName = makeDefaultOutput(root_files[0]);
     TFile outfile(outName, "RECREATE");
-
-    float hycal_vertex_z = fitAndDraw(merged->h_ee_vertex_z.get(), "Poscalib_result/hycal_vertex_z", 100.);
-    float hycal_center_x = fitAndDraw(merged->h_ee_center_x.get(), "Poscalib_result/hycal_center_x", 2.);
-    float hycal_center_y = fitAndDraw(merged->h_ee_center_y.get(), "Poscalib_result/hycal_center_y", 2.);
 
     // --- write output ---
     outfile.cd();
@@ -1428,6 +1428,7 @@ int main(int argc, char *argv[])
     merged->h_3cl_E_gem_cut->Write();
     merged->h_3cl_yield_gem_cut->Write();
     merged->h_3cl_mass_gem_cut->Write();
+    merged->h_3cl_mass_gem_cut_2comb->Write();
     merged->h_3cl_ptx_gem_cut->Write();
     merged->h_3cl_pty_gem_cut->Write();
     merged->h2_3cl_Pt_gem_cut->Write();
@@ -1448,12 +1449,6 @@ int main(int argc, char *argv[])
     merged->h_3cl_mass_totalE_time_clusterE_Pt_moller_cut->Write();
 
     outfile.cd("moller_analysis");
-    physics.FillNeventsModuleMap();
-    TH2F *h_map = physics.GetNeventsModuleMapHist();
-    TCanvas *c_map = new TCanvas("c_map", "Number of Events per Module", 1200, 1200);
-    h_map->Draw("COLZ");
-    c_map->Write();
-    h_map->Write();
 
     outfile.mkdir("module_energy"); outfile.cd("module_energy");
     for (int i = 0; i < hycal.module_count(); i++) {
@@ -1463,8 +1458,6 @@ int main(int argc, char *argv[])
     }
 
     outfile.Close();
-    
-    // physics.Resolution2Database(run_id); // example run ID
 
     std::cerr << "Result saved -> " << outName.Data() << "\n";
 }
@@ -1500,37 +1493,4 @@ static std::string makeDefaultOutput(const std::string &input_path)
         name += "_quick_check.root";
     }
     return (p.parent_path() / name).string();
-}
-
-float fitAndDraw(TH1F* hist, const std::string& out_path, const float fit_range){
-    if (!hist) {
-        std::cerr << "Cannot fit a null histogram for " << out_path << "\n";
-        return std::numeric_limits<float>::quiet_NaN();
-    }
-
-    TCanvas c("", "", 800, 600);
-    const float peak = hist->GetBinCenter(hist->GetMaximumBin());
-    int fit_status = -1;
-    if (hist->GetEntries() > 0)
-        fit_status = hist->Fit("gaus", "rq", "", peak-fit_range, peak+fit_range);
-    TF1 *gaus = hist->GetFunction("gaus");
-    const bool fit_succeeded = fit_status == 0 && gaus;
-
-    hist->Draw();
-    TLatex latex;
-    latex.SetNDC();
-    latex.SetTextSize(0.04);
-    if (fit_succeeded) {
-        latex.DrawLatex(0.15, 0.85,
-            Form("%.2f mm +- %.2f mm", gaus->GetParameter(1), gaus->GetParError(1)));
-    } else {
-        latex.DrawLatex(0.15, 0.85, "Gaussian fit failed");
-        std::cerr << "Gaussian fit failed for " << hist->GetName()
-                  << " (status " << fit_status << "); using peak position "
-                  << peak << " mm\n";
-    }
-    fs::create_directories(fs::path(out_path).parent_path());
-    c.SaveAs((out_path + ".png").c_str());
-
-    return fit_succeeded ? gaus->GetParameter(1) : peak;
 }
